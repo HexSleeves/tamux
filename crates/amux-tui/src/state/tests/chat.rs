@@ -1356,6 +1356,64 @@ fn thread_detail_refresh_preserves_optimistic_local_tail_when_smaller_snapshot_m
 }
 
 #[test]
+fn thread_detail_refresh_preserves_finalized_stream_after_stale_user_snapshot() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadCreated {
+        thread_id: "t1".into(),
+        title: "Test".into(),
+    });
+    state.reduce(ChatAction::AppendMessage {
+        thread_id: "t1".into(),
+        message: AgentMessage {
+            role: MessageRole::User,
+            content: "Follow up".into(),
+            timestamp: 100,
+            ..Default::default()
+        },
+    });
+    state.reduce(ChatAction::Delta {
+        thread_id: "t1".into(),
+        content: "Here is the answer".into(),
+    });
+    state.reduce(ChatAction::TurnDone {
+        thread_id: "t1".into(),
+        input_tokens: 1,
+        output_tokens: 2,
+        cost: None,
+        provider: None,
+        model: None,
+        tps: None,
+        generation_ms: None,
+        reasoning: None,
+        provider_final_result_json: None,
+    });
+
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 1,
+        loaded_message_start: 0,
+        loaded_message_end: 1,
+        messages: vec![AgentMessage {
+            id: Some("msg-user".into()),
+            role: MessageRole::User,
+            content: "Follow up".into(),
+            timestamp: 200,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let thread = state.active_thread().unwrap();
+    assert_eq!(thread.messages.len(), 2);
+    assert_eq!(thread.messages[0].content, "Follow up");
+    assert_eq!(
+        thread.messages[1].content, "Here is the answer",
+        "stale detail refresh should not erase the just-finalized assistant stream"
+    );
+}
+
+#[test]
 fn empty_thread_detail_does_not_wipe_existing_messages() {
     let mut state = ChatState::new();
     state.reduce(ChatAction::ThreadDetailReceived(AgentThread {

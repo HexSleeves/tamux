@@ -1018,6 +1018,7 @@ struct PreparedToolExecution {
     args: serde_json::Value,
     dispatch_tool_name: String,
     dispatch_args: serde_json::Value,
+    timeout_adjustments: Vec<String>,
     governance_decision: crate::agent::weles_governance::WelesExecutionDecision,
     critique_session_id: Option<String>,
     critique_decision: Option<String>,
@@ -1466,8 +1467,33 @@ async fn prepare_tool_execution(
             );
         }
     }
-    let (dispatch_tool_name, dispatch_args) =
+    let (dispatch_tool_name, mut dispatch_args) =
         normalize_tool_dispatch(effective_tool_name.as_str(), &effective_args);
+
+    let timeout_adjustments = {
+        let model = agent.operator_model.read().await;
+        let adaptation_mode = crate::agent::operator_model::SatisfactionAdaptationMode::from_label(
+            &model.operator_satisfaction.label,
+        );
+        let mut adjustments = Vec::new();
+        if let Some(adapted_timeout_seconds) = adapted_timeout_override_for_mode(
+            dispatch_tool_name.as_str(),
+            &dispatch_args,
+            adaptation_mode,
+        ) {
+            if let Some(map) = dispatch_args.as_object_mut() {
+                map.insert(
+                    "timeout_seconds".to_string(),
+                    serde_json::Value::Number(serde_json::Number::from(adapted_timeout_seconds)),
+                );
+                adjustments.push(format!(
+                    "timeout:{}:{}",
+                    dispatch_tool_name, adapted_timeout_seconds
+                ));
+            }
+        }
+        adjustments
+    };
 
     if !thread_id.trim().is_empty()
         && matches!(
@@ -1503,6 +1529,7 @@ async fn prepare_tool_execution(
         args: effective_args.clone(),
         dispatch_tool_name,
         dispatch_args,
+        timeout_adjustments,
         governance_decision,
         critique_session_id,
         critique_decision,
@@ -2028,6 +2055,12 @@ pub fn execute_tool<'a>(
                     &prepared.critique_adjustments,
                     prepared.critique_report_summary.as_deref(),
                 );
+                for adjustment in &prepared.timeout_adjustments {
+                    let reason = format!("adapted_runtime:{adjustment}");
+                    if !review.reasons.iter().any(|existing| existing == &reason) {
+                        review.reasons.push(reason);
+                    }
+                }
                 emit_workflow_notice_for_tool(
                     event_tx,
                     thread_id,
@@ -2078,6 +2111,12 @@ pub fn execute_tool<'a>(
                     &prepared.critique_adjustments,
                     prepared.critique_report_summary.as_deref(),
                 );
+                for adjustment in &prepared.timeout_adjustments {
+                    let reason = format!("adapted_runtime:{adjustment}");
+                    if !review.reasons.iter().any(|existing| existing == &reason) {
+                        review.reasons.push(reason);
+                    }
+                }
                 ToolResult {
                     tool_call_id: tool_call.id.clone(),
                     name: tool_call.function.name.clone(),

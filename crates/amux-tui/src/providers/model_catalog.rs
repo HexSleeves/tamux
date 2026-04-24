@@ -56,6 +56,7 @@ pub(super) fn known_models_for_provider_auth(
             ("claude-3-haiku-20240307", "Claude Haiku 3", 200_000),
         ],
         PROVIDER_ID_GITHUB_COPILOT => &[
+            ("gpt-5.5", "GPT-5.5", 400_000),
             ("claude-haiku-4.5", "Claude Haiku 4.5", 160_000),
             ("claude-opus-4.5", "Claude Opus 4.5", 160_000),
             ("claude-opus-4.6", "Claude Opus 4.6", 192_000),

@@ -101,6 +101,38 @@ fn daemon_tool_timeout_seconds(tool_name: &str, args: &serde_json::Value) -> u64
         .min(MAX_DAEMON_TOOL_TIMEOUT_SECS)
 }
 
+fn adapted_timeout_override_for_mode(
+    tool_name: &str,
+    args: &serde_json::Value,
+    mode: crate::agent::operator_model::SatisfactionAdaptationMode,
+) -> Option<u64> {
+    if args
+        .get("timeout_seconds")
+        .and_then(|value| value.as_u64())
+        .is_some()
+    {
+        return None;
+    }
+
+    let adapted = match mode {
+        crate::agent::operator_model::SatisfactionAdaptationMode::Normal => return None,
+        crate::agent::operator_model::SatisfactionAdaptationMode::Tightened => match tool_name {
+            "search_files" => 90,
+            "onecontext_search" | "fetch_url" | "web_search" => 240,
+            _ => return None,
+        },
+        crate::agent::operator_model::SatisfactionAdaptationMode::Minimal => match tool_name {
+            "search_files" => 90,
+            "onecontext_search" | "fetch_url" | "web_search" => 180,
+            _ => return None,
+        },
+    };
+
+    let default_timeout = default_timeout_seconds_for_tool(tool_name);
+    (adapted < default_timeout)
+        .then_some(adapted.min(default_timeout).min(MAX_DAEMON_TOOL_TIMEOUT_SECS))
+}
+
 fn normalize_onecontext_simple_query(query: &str) -> String {
     let mut normalized = String::with_capacity(query.len());
     let mut last_was_space = true;

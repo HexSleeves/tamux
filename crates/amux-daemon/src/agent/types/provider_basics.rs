@@ -117,6 +117,12 @@ pub const DEEPSEEK_MODELS: &[ModelDefinition] = &[
 
 pub const GITHUB_COPILOT_MODELS: &[ModelDefinition] = &[
     ModelDefinition {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        context_window: 400_000,
+        modalities: TEXT_IMAGE,
+    },
+    ModelDefinition {
         id: "claude-haiku-4.5",
         name: "Claude Haiku 4.5",
         context_window: 160_000,

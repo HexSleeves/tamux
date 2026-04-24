@@ -244,6 +244,104 @@ async fn context_summary_picks_latest_goal_by_updated_at() {
 }
 
 #[tokio::test]
+async fn context_summary_excludes_goal_threads_but_keeps_goal_metadata() {
+    let config = Arc::new(RwLock::new(AgentConfig::default()));
+    let (event_tx, _) = broadcast::channel(8);
+    let circuit_breakers = Arc::new(CircuitBreakerRegistry::from_provider_keys(
+        std::iter::empty(),
+    ));
+    let engine = ConciergeEngine::new(config, event_tx, reqwest::Client::new(), circuit_breakers);
+    let now = test_now_millis();
+    let threads = RwLock::new(HashMap::from([
+        (
+            "thread-real".to_string(),
+            thread_with_messages(
+                "thread-real",
+                "Actual work",
+                now - 100,
+                vec![user_message("continue regular work", now - 110)],
+            ),
+        ),
+        (
+            "thread-goal-root".to_string(),
+            thread_with_messages(
+                "thread-goal-root",
+                "Goal root",
+                now,
+                vec![user_message("hidden goal prompt copy", now - 20)],
+            ),
+        ),
+        (
+            "thread-goal-active".to_string(),
+            thread_with_messages(
+                "thread-goal-active",
+                "Goal active step",
+                now - 10,
+                vec![user_message("hidden active step", now - 15)],
+            ),
+        ),
+        (
+            "thread-goal-exec".to_string(),
+            thread_with_messages(
+                "thread-goal-exec",
+                "Goal execution step",
+                now - 20,
+                vec![user_message("hidden execution detail", now - 25)],
+            ),
+        ),
+    ]));
+    let tasks = Mutex::new(std::collections::VecDeque::new());
+    let mut goal_run = sample_goal_run(
+        "goal-latest",
+        "Trim concierge goal context",
+        GoalRunStatus::Running,
+        now,
+        Some("Plan the context cleanup"),
+    );
+    goal_run.goal = "Exclude goal-owned threads from concierge welcome history".to_string();
+    goal_run.thread_id = Some("thread-goal-root".to_string());
+    goal_run.root_thread_id = Some("thread-goal-root".to_string());
+    goal_run.active_thread_id = Some("thread-goal-active".to_string());
+    goal_run.execution_thread_ids = vec!["thread-goal-exec".to_string()];
+    goal_run.steps[0].status = GoalRunStepStatus::Completed;
+    goal_run.steps[0].summary = Some("Identified all goal-owned thread IDs".to_string());
+    goal_run.steps[0].completed_at = Some(now - 5);
+    let goal_runs = Mutex::new(std::collections::VecDeque::from([goal_run]));
+
+    let context = engine
+        .gather_context(
+            &threads,
+            &tasks,
+            &goal_runs,
+            ConciergeDetailLevel::ProactiveTriage,
+            &[],
+        )
+        .await;
+
+    assert_eq!(
+        context
+            .recent_threads
+            .iter()
+            .map(|thread| thread.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["thread-real"]
+    );
+    let latest_goal = context
+        .latest_goal_run
+        .as_ref()
+        .expect("goal metadata should still be present");
+    assert_eq!(latest_goal.status, GoalRunStatus::Running);
+    assert_eq!(
+        latest_goal.prompt.as_deref(),
+        Some("Exclude goal-owned threads from concierge welcome history")
+    );
+    assert_eq!(
+        latest_goal.latest_step_result.as_deref(),
+        Some("Identified all goal-owned thread IDs")
+    );
+}
+
+#[tokio::test]
 async fn context_summary_ignores_assistant_only_concierge_like_threads() {
     let config = Arc::new(RwLock::new(AgentConfig::default()));
     let (event_tx, _) = broadcast::channel(8);

@@ -630,7 +630,11 @@ providers:
         let provider =
             get_provider_definition(PROVIDER_ID_GITHUB_COPILOT).expect("copilot provider");
         assert!(!provider.models.is_empty());
-        assert_eq!(provider.default_model, "gpt-4.1");
+        assert_eq!(provider.default_model, "gpt-5.5");
+        assert_eq!(
+            provider.models.first().map(|model| model.id),
+            Some("gpt-5.5")
+        );
         assert_eq!(provider.default_transport, ApiTransport::Responses);
         assert!(provider
             .supported_transports
@@ -641,6 +645,7 @@ providers:
         assert!(provider
             .supported_transports
             .contains(&ApiTransport::AnthropicMessages));
+        assert!(provider.models.iter().any(|model| model.id == "gpt-5.5"));
         assert!(provider.models.iter().any(|model| model.id == "gpt-5.4"));
         assert!(provider
             .models

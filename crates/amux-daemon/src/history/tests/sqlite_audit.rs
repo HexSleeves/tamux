@@ -635,6 +635,56 @@ async fn ensure_column_adds_user_action_to_action_audit() -> Result<()> {
 }
 
 #[tokio::test]
+async fn init_schema_migrates_legacy_causal_traces_before_family_index() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("tamux-history-test-{}", Uuid::new_v4()));
+    let history_dir = root.join("history");
+    fs::create_dir_all(&history_dir)?;
+    let db_path = history_dir.join("command-history.db");
+
+    {
+        let conn = rusqlite::Connection::open(&db_path)?;
+        conn.execute_batch(
+            "CREATE TABLE causal_traces (
+                id                    TEXT PRIMARY KEY,
+                thread_id             TEXT,
+                goal_run_id           TEXT,
+                task_id               TEXT,
+                decision_type         TEXT NOT NULL,
+                selected_json         TEXT NOT NULL,
+                rejected_options_json TEXT,
+                context_hash          TEXT,
+                causal_factors_json   TEXT,
+                outcome_json          TEXT NOT NULL,
+                model_used            TEXT,
+                created_at            INTEGER NOT NULL
+            );",
+        )?;
+    }
+
+    let store = HistoryStore::new_test_store(&root).await?;
+    let (has_trace_family, index_columns) = store
+        .conn
+        .call(|conn| {
+            let has_trace_family = table_has_column(conn, "causal_traces", "trace_family")?;
+            let mut stmt = conn.prepare("PRAGMA index_info('idx_causal_traces_family')")?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(2))?;
+            let index_columns = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+            Ok((has_trace_family, index_columns))
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    assert!(has_trace_family);
+    assert_eq!(
+        index_columns,
+        vec!["trace_family".to_string(), "created_at".to_string()]
+    );
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn dismiss_audit_entry_sets_user_action() -> Result<()> {
     let (store, root) = make_test_store().await?;
     let entry = AuditEntryRow {

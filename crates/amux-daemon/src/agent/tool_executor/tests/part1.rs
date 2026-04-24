@@ -1,5 +1,6 @@
     use super::{
         build_list_files_script, build_write_file_command, build_write_file_script,
+        adapted_timeout_override_for_mode,
         command_looks_interactive, command_matches_policy_risk, command_requires_managed_state,
         daemon_tool_timeout_seconds, default_timeout_seconds_for_tool,
         execute_apply_patch, execute_create_file, execute_get_git_line_statuses,
@@ -105,6 +106,26 @@
                 &serde_json::json!({ "timeout_seconds": 999 })
             ),
             600
+        );
+    }
+
+    #[test]
+    fn adapted_timeout_override_tightens_defaults_without_overriding_explicit_value() {
+        assert_eq!(
+            adapted_timeout_override_for_mode(
+                "fetch_url",
+                &serde_json::json!({}),
+                crate::agent::operator_model::SatisfactionAdaptationMode::Minimal,
+            ),
+            Some(180)
+        );
+        assert_eq!(
+            adapted_timeout_override_for_mode(
+                "fetch_url",
+                &serde_json::json!({ "timeout_seconds": 42 }),
+                crate::agent::operator_model::SatisfactionAdaptationMode::Minimal,
+            ),
+            None
         );
     }
 

@@ -227,8 +227,14 @@ impl ConciergeEngine {
                 goal_run_status_label(task.status),
                 format_timestamp(task.updated_at)
             ));
+            if let Some(goal_prompt) = task.prompt.as_deref() {
+                prompt.push_str(&format!("Goal prompt: {}\n", goal_prompt));
+            }
             if let Some(summary) = task.summary.as_deref() {
                 prompt.push_str(&format!("Goal summary: {}\n", summary));
+            }
+            if let Some(latest_step_result) = task.latest_step_result.as_deref() {
+                prompt.push_str(&format!("Latest step result: {}\n", latest_step_result));
             }
         }
 
@@ -275,6 +281,12 @@ impl ConciergeEngine {
                 if let Some(summary) = task.summary.as_deref() {
                     parts.push(format!("**Goal summary:** {}", summary));
                 }
+                if let Some(goal_prompt) = task.prompt.as_deref() {
+                    parts.push(format!("**Goal prompt:** {}", goal_prompt));
+                }
+                if let Some(latest_step_result) = task.latest_step_result.as_deref() {
+                    parts.push(format!("**Latest step result:** {}", latest_step_result));
+                }
             }
             if context.running_goal_total > 0 || context.paused_goal_total > 0 {
                 parts.push(format!(
@@ -286,13 +298,21 @@ impl ConciergeEngine {
             parts.join("\n")
         } else if let Some(task) = context.latest_goal_run.as_ref() {
             format!(
-                "Welcome back! Latest goal: **{}** [{}] ({}).{}",
+                "Welcome back! Latest goal: **{}** [{}] ({}).{}{}{}",
                 task.label,
                 goal_run_status_label(task.status),
                 format_timestamp(task.updated_at),
                 task.summary
                     .as_deref()
                     .map(|summary| format!(" Summary: {}", summary))
+                    .unwrap_or_default(),
+                task.prompt
+                    .as_deref()
+                    .map(|goal_prompt| format!(" Goal prompt: {}", goal_prompt))
+                    .unwrap_or_default(),
+                task.latest_step_result
+                    .as_deref()
+                    .map(|result| format!(" Latest step result: {}", result))
                     .unwrap_or_default()
             )
         } else {
@@ -414,11 +434,13 @@ pub(super) fn build_welcome_signature(
             .as_ref()
             .map(|task| {
                 format!(
-                    "{}|{:?}|{}|{}",
+                    "{}|{}|{:?}|{}|{}|{}",
                     task.label,
+                    task.prompt.as_deref().unwrap_or(""),
                     task.status,
                     task.updated_at,
-                    task.summary.as_deref().unwrap_or("")
+                    task.summary.as_deref().unwrap_or(""),
+                    task.latest_step_result.as_deref().unwrap_or("")
                 )
             })
             .unwrap_or_default()
@@ -432,7 +454,7 @@ fn minimal_welcome_content(context: &WelcomeContext) -> String {
         context.latest_goal_run.as_ref(),
     ) {
         (Some(last), Some(task)) => format!(
-            "Welcome back! Last session: **{}** ({}). Latest goal: **{}** [{}] ({}).{} Goals: {} running, {} paused.",
+            "Welcome back! Last session: **{}** ({}). Latest goal: **{}** [{}] ({}).{}{}{} Goals: {} running, {} paused.",
             last.title,
             format_timestamp(last.updated_at),
             task.label,
@@ -441,6 +463,14 @@ fn minimal_welcome_content(context: &WelcomeContext) -> String {
             task.summary
                 .as_deref()
                 .map(|summary| format!(" Summary: {}.", summary))
+                .unwrap_or_default(),
+            task.prompt
+                .as_deref()
+                .map(|goal_prompt| format!(" Goal prompt: {}.", goal_prompt))
+                .unwrap_or_default(),
+            task.latest_step_result
+                .as_deref()
+                .map(|result| format!(" Latest step result: {}.", result))
                 .unwrap_or_default(),
             context.running_goal_total,
             context.paused_goal_total
@@ -452,13 +482,21 @@ fn minimal_welcome_content(context: &WelcomeContext) -> String {
             last.message_count
         ),
         (None, Some(task)) => format!(
-            "Welcome back! Latest goal: **{}** [{}] ({}).{} Goals: {} running, {} paused.",
+            "Welcome back! Latest goal: **{}** [{}] ({}).{}{}{} Goals: {} running, {} paused.",
             task.label,
             goal_run_status_label(task.status),
             format_timestamp(task.updated_at),
             task.summary
                 .as_deref()
                 .map(|summary| format!(" Summary: {}.", summary))
+                .unwrap_or_default(),
+            task.prompt
+                .as_deref()
+                .map(|goal_prompt| format!(" Goal prompt: {}.", goal_prompt))
+                .unwrap_or_default(),
+            task.latest_step_result
+                .as_deref()
+                .map(|result| format!(" Latest step result: {}.", result))
                 .unwrap_or_default(),
             context.running_goal_total,
             context.paused_goal_total

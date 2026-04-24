@@ -108,10 +108,11 @@ async fn conflicting_memory_update_records_conflict_provenance_relationship() ->
             task_id: None,
             goal_run_id: None,
             created_at: 1,
+            sign: true,
         })
         .await?;
 
-    let error = apply_memory_update(
+    let result = apply_memory_update(
         &root,
         &history,
         MemoryTarget::Memory,
@@ -119,26 +120,35 @@ async fn conflicting_memory_update_records_conflict_provenance_relationship() ->
         "- shell: zsh",
         test_write_context(),
     )
-    .await
-    .expect_err("conflicting append should be rejected");
-    assert!(error
-        .to_string()
-        .contains("Potential contradiction detected"));
+    .await?;
+    assert!(result.contains("Reconciled contradiction"));
+
+    let final_content = tokio::fs::read_to_string(&memory_path).await?;
+    assert!(final_content.contains("## [SUPERSEDED]"));
+    assert!(final_content.contains("- shell: zsh"));
 
     let report = history
         .memory_provenance_report(Some("MEMORY.md"), 10)
         .await?;
-    let conflict_entry = report
+    let repair_entry = report
         .entries
         .iter()
-        .find(|entry| entry.mode == "conflict")
-        .expect("conflict provenance entry should exist");
-    assert_eq!(conflict_entry.status, "contradicted");
-    assert_eq!(conflict_entry.fact_keys, vec!["shell".to_string()]);
-    assert_eq!(conflict_entry.relationships.len(), 1);
-    assert_eq!(conflict_entry.relationships[0].relation_type, "contradicts");
+        .find(|entry| entry.mode == "repaired_conflict")
+        .expect("repair provenance entry should exist");
+    assert_eq!(repair_entry.status, "active");
+    assert_eq!(repair_entry.fact_keys, vec!["shell".to_string()]);
+    assert!(repair_entry.hash_valid);
+    assert!(repair_entry.signature_valid);
+
+    let remove_entry = report
+        .entries
+        .iter()
+        .find(|entry| entry.mode == "remove")
+        .expect("repair should emit remove provenance entry");
+    assert_eq!(remove_entry.relationships.len(), 1);
+    assert_eq!(remove_entry.relationships[0].relation_type, "retracts");
     assert_eq!(
-        conflict_entry.relationships[0].related_entry_id,
+        remove_entry.relationships[0].related_entry_id,
         "baseline-shell"
     );
 

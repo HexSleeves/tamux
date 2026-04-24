@@ -20,32 +20,101 @@ pub(super) fn append_line(path: &PathBuf, line: &str) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn compute_memory_provenance_hash(
+    target: &str,
+    mode: &str,
+    source_kind: &str,
+    content: &str,
+    fact_keys: &[String],
+    thread_id: Option<&str>,
+    task_id: Option<&str>,
+    goal_run_id: Option<&str>,
+    created_at: u64,
+) -> String {
+    compute_provenance_hash(
+        0,
+        created_at,
+        "memory_write",
+        &format!("{target}:{mode}"),
+        &serde_json::json!({
+            "source_kind": source_kind,
+            "content": content,
+            "fact_keys": fact_keys,
+            "thread_id": thread_id,
+            "task_id": task_id,
+            "goal_run_id": goal_run_id,
+        }),
+        "memory-provenance",
+        "memory",
+        goal_run_id,
+        task_id,
+        thread_id,
+        None,
+        None,
+        "memory_provenance",
+    )
+}
+
 pub(super) fn memory_provenance_entry_from_row(
     row: &rusqlite::Row<'_>,
     now_ms: u64,
 ) -> MemoryProvenanceReportEntry {
     let created_at = row.get::<_, i64>(9).unwrap_or_default().max(0) as u64;
+    let target: String = row.get(1).unwrap_or_default();
+    let mode: String = row.get(2).unwrap_or_default();
+    let source_kind: String = row.get(3).unwrap_or_default();
+    let content: String = row.get(4).unwrap_or_default();
     let confirmed_at = row
-        .get::<_, Option<i64>>(10)
+        .get::<_, Option<i64>>(13)
         .ok()
         .flatten()
         .map(|value| value.max(0) as u64);
     let retracted_at = row
-        .get::<_, Option<i64>>(11)
+        .get::<_, Option<i64>>(14)
         .ok()
         .flatten()
         .map(|value| value.max(0) as u64);
     let fact_keys_json: String = row.get(5).unwrap_or_else(|_| "[]".to_string());
     let fact_keys = serde_json::from_str::<Vec<String>>(&fact_keys_json).unwrap_or_default();
+    let entry_hash: String = row.get(10).unwrap_or_default();
+    let signature: Option<String> = row.get(11).ok().flatten();
+    let signature_scheme: Option<String> = row.get(12).ok().flatten();
+    let thread_id: Option<String> = row.get(6).ok();
+    let task_id: Option<String> = row.get(7).ok();
+    let goal_run_id: Option<String> = row.get(8).ok();
     let age_days = now_ms.saturating_sub(created_at) as f64 / 86_400_000.0;
     let mut confidence = memory_provenance_confidence(age_days);
-    let mode: String = row.get(2).unwrap_or_default();
+    let hash_valid = if entry_hash.is_empty() {
+        false
+    } else {
+        let expected_hash = compute_memory_provenance_hash(
+            &target,
+            &mode,
+            &source_kind,
+            &content,
+            &fact_keys,
+            thread_id.as_deref(),
+            task_id.as_deref(),
+            goal_run_id.as_deref(),
+            created_at,
+        );
+        expected_hash == entry_hash
+    };
+    let signature_valid = match (&signature, signature_scheme.as_deref()) {
+        (Some(_), Some(scheme)) if scheme == provenance_signature_scheme_ed25519() => hash_valid,
+        (Some(_), Some(_)) => false,
+        (Some(_), None) => hash_valid,
+        (None, _) => entry_hash.is_empty(),
+    };
     let status = if retracted_at.is_some() {
         confidence = confidence.min(0.2);
         "retracted"
     } else if confirmed_at.is_some() {
         confidence = confidence.max(0.95);
         "confirmed"
+    } else if !entry_hash.is_empty() && (!hash_valid || !signature_valid) {
+        confidence = confidence.min(0.1);
+        "invalid"
     } else if mode == "conflict" {
         confidence = confidence.min(0.35);
         "contradicted"
@@ -59,18 +128,23 @@ pub(super) fn memory_provenance_entry_from_row(
 
     MemoryProvenanceReportEntry {
         id: row.get(0).unwrap_or_default(),
-        target: row.get(1).unwrap_or_default(),
+        target,
         mode,
-        source_kind: row.get(3).unwrap_or_default(),
-        content: row.get(4).unwrap_or_default(),
+        source_kind,
+        content,
         fact_keys,
-        thread_id: row.get(6).ok(),
-        task_id: row.get(7).ok(),
-        goal_run_id: row.get(8).ok(),
+        thread_id,
+        task_id,
+        goal_run_id,
         created_at,
         age_days,
         confidence,
         status: status.to_string(),
+        entry_hash: (!entry_hash.is_empty()).then_some(entry_hash),
+        signature,
+        signature_scheme,
+        hash_valid,
+        signature_valid,
         relationships: Vec::new(),
     }
 }

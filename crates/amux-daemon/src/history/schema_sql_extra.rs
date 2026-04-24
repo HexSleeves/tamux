@@ -6,6 +6,7 @@ pub(super) fn extended_schema_sql() -> &'static str {
                 goal_run_id           TEXT,
                 task_id               TEXT,
                 decision_type         TEXT NOT NULL,
+                trace_family          TEXT NOT NULL DEFAULT '',
                 selected_json         TEXT NOT NULL,
                 rejected_options_json TEXT,
                 context_hash          TEXT,
@@ -28,6 +29,9 @@ pub(super) fn extended_schema_sql() -> &'static str {
                 task_id       TEXT,
                 goal_run_id   TEXT,
                 created_at    INTEGER NOT NULL,
+                entry_hash    TEXT NOT NULL DEFAULT '',
+                signature     TEXT,
+                signature_scheme TEXT,
                 confirmed_at  INTEGER,
                 retracted_at  INTEGER
             );
@@ -220,6 +224,18 @@ pub(super) fn extended_schema_sql() -> &'static str {
                 updated_at     INTEGER NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_collaboration_sessions_updated ON collaboration_sessions(updated_at DESC);
+
+            CREATE TABLE IF NOT EXISTS collaboration_agent_outcomes (
+                parent_task_id TEXT NOT NULL,
+                task_id        TEXT NOT NULL,
+                success_count  INTEGER NOT NULL DEFAULT 0,
+                failure_count  INTEGER NOT NULL DEFAULT 0,
+                learned_score  REAL NOT NULL DEFAULT 0.5,
+                last_outcome   TEXT,
+                updated_at_ms  INTEGER NOT NULL,
+                PRIMARY KEY (parent_task_id, task_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_collaboration_agent_outcomes_parent_updated ON collaboration_agent_outcomes(parent_task_id, updated_at_ms DESC);
 
             CREATE TABLE IF NOT EXISTS debate_sessions (
                 session_id   TEXT PRIMARY KEY,

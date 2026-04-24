@@ -85,6 +85,7 @@ pub struct MemoryProvenanceRecord<'a> {
     pub task_id: Option<&'a str>,
     pub goal_run_id: Option<&'a str>,
     pub created_at: u64,
+    pub sign: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -821,6 +822,14 @@ pub struct MemoryProvenanceReportEntry {
     pub age_days: f64,
     pub confidence: f64,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_scheme: Option<String>,
+    pub hash_valid: bool,
+    pub signature_valid: bool,
     pub relationships: Vec<MemoryProvenanceRelationship>,
 }
 

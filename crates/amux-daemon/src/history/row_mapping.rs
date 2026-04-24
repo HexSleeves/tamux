@@ -36,6 +36,7 @@ pub(super) fn refresh_thread_stats(
 
 #[derive(Debug, Clone)]
 pub struct CausalTraceRecord {
+    pub trace_family: String,
     pub selected_json: String,
     pub causal_factors_json: String,
     pub outcome_json: String,
@@ -50,6 +51,7 @@ pub struct CausalTraceFullRecord {
     pub goal_run_id: Option<String>,
     pub task_id: Option<String>,
     pub decision_type: String,
+    pub trace_family: String,
     pub selected_json: String,
     pub rejected_options_json: String,
     pub context_hash: String,

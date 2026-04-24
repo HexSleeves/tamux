@@ -886,6 +886,7 @@ async fn request_goal_replan_includes_recovery_guidance_when_present() {
             None,
             None,
             "recovery",
+            crate::agent::learning::traces::DecisionType::Recovery.family_label(),
             &serde_json::json!({
                 "option_type": "replan_after_failure",
                 "reasoning": "Recovered from a previous failed step.",

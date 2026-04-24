@@ -1,4 +1,5 @@
 use super::*;
+use rusqlite::OptionalExtension;
 use uuid::Uuid;
 
 fn overlapping_fact_keys(left: &[String], right: &[String]) -> Vec<String> {
@@ -156,6 +157,27 @@ impl HistoryStore {
         let goal_run_id = record.goal_run_id.map(str::to_string);
         let created_at = record.created_at;
         let fact_keys_owned: Vec<String> = record.fact_keys.to_vec();
+        let entry_hash = compute_memory_provenance_hash(
+            record.target,
+            record.mode,
+            record.source_kind,
+            record.content,
+            record.fact_keys,
+            record.thread_id,
+            record.task_id,
+            record.goal_run_id,
+            record.created_at,
+        );
+        let signing_material = if record.sign {
+            Some(self.provenance_signing_material()?)
+        } else {
+            None
+        };
+        let signature = signing_material
+            .as_ref()
+            .map(|material| sign_provenance_hash_ed25519(material, &entry_hash))
+            .transpose()?;
+        let signature_scheme = signing_material.as_ref().map(|material| material.scheme.clone());
         let relationship_target = match record.mode {
             "remove" => Some((
                 target.clone(),
@@ -178,8 +200,8 @@ impl HistoryStore {
         self.conn.call(move |conn| {
             conn.execute(
                 "INSERT OR REPLACE INTO memory_provenance \
-                 (id, target, mode, source_kind, content, fact_keys_json, thread_id, task_id, goal_run_id, created_at, confirmed_at, retracted_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, NULL)",
+                 (id, target, mode, source_kind, content, fact_keys_json, thread_id, task_id, goal_run_id, created_at, entry_hash, signature, signature_scheme, confirmed_at, retracted_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, NULL)",
                 params![
                     id,
                     target,
@@ -191,11 +213,14 @@ impl HistoryStore {
                     task_id,
                     goal_run_id,
                     created_at as i64,
+                    entry_hash,
+                    signature,
+                    signature_scheme,
                 ],
             )?;
             if let Some((target, source_entry_id, fact_keys, created_at, relation_type)) = relationship_target {
                 let mut stmt = conn.prepare(
-                    "SELECT id, fact_keys_json FROM memory_provenance WHERE target = ?1 AND id != ?2 AND mode NOT IN ('remove', 'conflict') ORDER BY created_at DESC LIMIT 64",
+                    "SELECT id, fact_keys_json FROM memory_provenance WHERE target = ?1 AND id != ?2 AND mode NOT IN ('remove', 'conflict', 'repaired_conflict') ORDER BY created_at DESC LIMIT 64",
                 )?;
                 let rows = stmt.query_map(params![target, source_entry_id], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -244,6 +269,7 @@ impl HistoryStore {
         entry_id: &str,
         confirmed_at: u64,
     ) -> Result<bool> {
+        self.ensure_valid_memory_provenance_entry(entry_id).await?;
         let entry_id = entry_id.to_string();
         let confirmed_at = confirmed_at as i64;
         let updated = self
@@ -265,6 +291,7 @@ impl HistoryStore {
         entry_id: &str,
         retracted_at: u64,
     ) -> Result<bool> {
+        self.ensure_valid_memory_provenance_entry(entry_id).await?;
         let entry_id = entry_id.to_string();
         let retracted_at = retracted_at as i64;
         let updated = self
@@ -281,12 +308,177 @@ impl HistoryStore {
         Ok(updated > 0)
     }
 
+    pub async fn retract_memory_provenance_entries_for_fact_keys(
+        &self,
+        target: &str,
+        fact_keys: &[String],
+        retracted_at: u64,
+    ) -> Result<Vec<String>> {
+        if fact_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let target = target.to_string();
+        let fact_keys = fact_keys.to_vec();
+        let retracted_at = retracted_at as i64;
+        self.conn
+            .call(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT id, fact_keys_json FROM memory_provenance WHERE target = ?1 AND mode NOT IN ('remove', 'conflict') AND retracted_at IS NULL",
+                )?;
+                let rows = stmt.query_map(params![target], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+
+                let mut matching_ids = Vec::new();
+                for row in rows {
+                    let (entry_id, fact_keys_json) = row?;
+                    let candidate_keys = serde_json::from_str::<Vec<String>>(&fact_keys_json)
+                        .unwrap_or_default();
+                    if !overlapping_fact_keys(&fact_keys, &candidate_keys).is_empty() {
+                        matching_ids.push(entry_id);
+                    }
+                }
+
+                for entry_id in &matching_ids {
+                    conn.execute(
+                        "UPDATE memory_provenance SET retracted_at = ?2, confirmed_at = NULL WHERE id = ?1",
+                        params![entry_id, retracted_at],
+                    )?;
+                }
+
+                Ok(matching_ids)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    }
+
+    async fn ensure_valid_memory_provenance_entry(&self, entry_id: &str) -> Result<()> {
+        let signing_material = self.stored_provenance_signing_material();
+        let legacy_signing_key = self.legacy_provenance_signing_key();
+        let entry_id = entry_id.to_string();
+        let row: Option<(
+            String,
+            String,
+            String,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            u64,
+            String,
+            Option<String>,
+            Option<String>,
+        )> = self
+            .conn
+            .call(move |conn| {
+                Ok(conn
+                    .query_row(
+                        "SELECT target, mode, source_kind, content, fact_keys_json, thread_id, task_id, goal_run_id, created_at, entry_hash, signature, signature_scheme FROM memory_provenance WHERE id = ?1",
+                        params![entry_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, String>(3)?,
+                                row.get::<_, String>(4)?,
+                                row.get::<_, Option<String>>(5)?,
+                                row.get::<_, Option<String>>(6)?,
+                                row.get::<_, Option<String>>(7)?,
+                                row.get::<_, i64>(8)?.max(0) as u64,
+                                row.get::<_, String>(9)?,
+                                row.get::<_, Option<String>>(10)?,
+                                row.get::<_, Option<String>>(11)?,
+                            ))
+                        },
+                    )
+                    .optional()?)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        let Some((
+            target,
+            mode,
+            source_kind,
+            content,
+            fact_keys_json,
+            thread_id,
+            task_id,
+            goal_run_id,
+            created_at,
+            entry_hash,
+            signature,
+            signature_scheme,
+        )) = row
+        else {
+            return Ok(());
+        };
+
+        if entry_hash.trim().is_empty() {
+            return Ok(());
+        }
+
+        let fact_keys = serde_json::from_str::<Vec<String>>(&fact_keys_json).unwrap_or_default();
+        let expected_hash = compute_memory_provenance_hash(
+            &target,
+            &mode,
+            &source_kind,
+            &content,
+            &fact_keys,
+            thread_id.as_deref(),
+            task_id.as_deref(),
+            goal_run_id.as_deref(),
+            created_at,
+        );
+        if expected_hash != entry_hash {
+            anyhow::bail!(
+                "memory provenance entry failed integrity validation: hash mismatch"
+            );
+        }
+
+        match (signature.as_deref(), signature_scheme.as_deref()) {
+            (Some(signature), Some(scheme)) if scheme == provenance_signature_scheme_ed25519() => {
+                let valid = signing_material.as_ref().is_some_and(|material| {
+                    verify_provenance_signature_ed25519(material, &entry_hash, signature)
+                });
+                if !valid {
+                    anyhow::bail!(
+                        "memory provenance entry failed integrity validation: signature mismatch"
+                    );
+                }
+            }
+            (Some(signature), None) => {
+                let valid = legacy_signing_key
+                    .as_deref()
+                    .is_some_and(|key| *signature == sign_provenance_hash(key, &entry_hash));
+                if !valid {
+                    anyhow::bail!(
+                        "memory provenance entry failed integrity validation: signature mismatch"
+                    );
+                }
+            }
+            (None, None) => return Ok(()),
+            _ => {
+                anyhow::bail!(
+                    "memory provenance entry failed integrity validation: incomplete signed provenance record"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     pub async fn memory_provenance_report(
         &self,
         target: Option<&str>,
         limit: usize,
     ) -> Result<MemoryProvenanceReport> {
         let target = target.map(str::to_string);
+        let signing_material = self.stored_provenance_signing_material();
+        let legacy_signing_key = self.legacy_provenance_signing_key();
         self.conn.call(move |conn| {
         let limit = limit.clamp(1, 200);
         let normalized_target = target
@@ -307,7 +499,7 @@ impl HistoryStore {
         match normalized_target.as_deref() {
             Some(target) => {
                 let mut stmt = conn.prepare(
-                    "SELECT id, target, mode, source_kind, content, fact_keys_json, thread_id, task_id, goal_run_id, created_at, confirmed_at, retracted_at \
+                    "SELECT id, target, mode, source_kind, content, fact_keys_json, thread_id, task_id, goal_run_id, created_at, entry_hash, signature, signature_scheme, confirmed_at, retracted_at \
                      FROM memory_provenance WHERE target = ?1 ORDER BY created_at DESC LIMIT ?2",
                 )?;
                 let rows = stmt.query_map(params![target, limit as i64], |row| {
@@ -315,6 +507,26 @@ impl HistoryStore {
                 })?;
                 for row in rows {
                     let mut entry = row?;
+                    entry.signature_valid = match (&entry.signature, entry.signature_scheme.as_deref()) {
+                        (Some(signature), Some(scheme)) if scheme == provenance_signature_scheme_ed25519() => {
+                            signing_material.as_ref().is_some_and(|material| {
+                                entry.entry_hash.as_deref().is_some_and(|hash| {
+                                    verify_provenance_signature_ed25519(material, hash, signature)
+                                })
+                            })
+                        }
+                        (Some(signature), None) => legacy_signing_key.as_deref().is_some_and(|key| {
+                            entry.entry_hash.as_deref().is_some_and(|hash| {
+                                *signature == sign_provenance_hash(key, hash)
+                            })
+                        }),
+                        (Some(_), Some(_)) => false,
+                        (None, _) => entry.entry_hash.is_none(),
+                    };
+                    if entry.entry_hash.is_some() && (!entry.hash_valid || !entry.signature_valid) {
+                        entry.status = "invalid".to_string();
+                        entry.confidence = entry.confidence.min(0.1);
+                    }
                     entry.relationships = relationship_rows_for_entry(conn, &entry.id)?;
                     *summary_by_target.entry(entry.target.clone()).or_insert(0) += 1;
                     *summary_by_source
@@ -326,7 +538,7 @@ impl HistoryStore {
             }
             None => {
                 let mut stmt = conn.prepare(
-                    "SELECT id, target, mode, source_kind, content, fact_keys_json, thread_id, task_id, goal_run_id, created_at, confirmed_at, retracted_at \
+                    "SELECT id, target, mode, source_kind, content, fact_keys_json, thread_id, task_id, goal_run_id, created_at, entry_hash, signature, signature_scheme, confirmed_at, retracted_at \
                      FROM memory_provenance ORDER BY created_at DESC LIMIT ?1",
                 )?;
                 let rows = stmt.query_map(params![limit as i64], |row| {
@@ -334,6 +546,26 @@ impl HistoryStore {
                 })?;
                 for row in rows {
                     let mut entry = row?;
+                    entry.signature_valid = match (&entry.signature, entry.signature_scheme.as_deref()) {
+                        (Some(signature), Some(scheme)) if scheme == provenance_signature_scheme_ed25519() => {
+                            signing_material.as_ref().is_some_and(|material| {
+                                entry.entry_hash.as_deref().is_some_and(|hash| {
+                                    verify_provenance_signature_ed25519(material, hash, signature)
+                                })
+                            })
+                        }
+                        (Some(signature), None) => legacy_signing_key.as_deref().is_some_and(|key| {
+                            entry.entry_hash.as_deref().is_some_and(|hash| {
+                                *signature == sign_provenance_hash(key, hash)
+                            })
+                        }),
+                        (Some(_), Some(_)) => false,
+                        (None, _) => entry.entry_hash.is_none(),
+                    };
+                    if entry.entry_hash.is_some() && (!entry.hash_valid || !entry.signature_valid) {
+                        entry.status = "invalid".to_string();
+                        entry.confidence = entry.confidence.min(0.1);
+                    }
                     entry.relationships = relationship_rows_for_entry(conn, &entry.id)?;
                     *summary_by_target.entry(entry.target.clone()).or_insert(0) += 1;
                     *summary_by_source

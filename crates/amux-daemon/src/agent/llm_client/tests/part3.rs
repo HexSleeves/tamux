@@ -355,7 +355,8 @@
         .expect("copilot validation should return models");
 
         assert!(models.len() > 10);
-        assert!(models.iter().any(|model| model.id == "gpt-4.1"));
+        assert_eq!(models.first().map(|model| model.id.as_str()), Some("gpt-5.5"));
+        assert!(models.iter().any(|model| model.id == "gpt-5.5"));
         assert!(models.iter().any(|model| model.id == "gpt-5.4"));
         assert!(models.iter().any(|model| model.id == "claude-sonnet-4.6"));
         assert!(models.iter().any(|model| model.id == "raptor-mini"));

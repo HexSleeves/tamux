@@ -318,6 +318,25 @@ pub(super) async fn apply_memory_update(
     if matches!(mode, MemoryUpdateMode::Append | MemoryUpdateMode::Replace) {
         let contradictions = detect_memory_contradictions(&existing, trimmed);
         if !contradictions.is_empty() {
+            let repaired = repair_memory_contradictions(
+                history,
+                target,
+                &path,
+                &existing,
+                trimmed,
+                &contradictions,
+                &context,
+            )
+            .await?;
+            if repaired {
+                let final_content = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+                return Ok(format!(
+                    "Reconciled contradiction in {} via provenance-backed supersession ({} / {} chars).",
+                    target.label(),
+                    final_content.chars().count(),
+                    target.limit_chars()
+                ));
+            }
             record_memory_conflict_provenance(history, target, &contradictions, &context).await?;
             return Err(contradiction_error_message(target, &contradictions));
         }
@@ -547,6 +566,7 @@ async fn record_memory_conflict_provenance(
             task_id: context.task_id,
             goal_run_id: context.goal_run_id,
             created_at: now_millis(),
+            sign: true,
         })
         .await
 }
@@ -578,8 +598,114 @@ async fn record_memory_provenance(
             task_id: context.task_id,
             goal_run_id: context.goal_run_id,
             created_at: now_millis(),
+            sign: true,
         })
         .await
+}
+
+async fn repair_memory_contradictions(
+    history: &HistoryStore,
+    target: MemoryTarget,
+    path: &std::path::Path,
+    existing: &str,
+    incoming: &str,
+    contradictions: &[(MemoryFactCandidate, MemoryFactCandidate)],
+    context: &MemoryWriteContext<'_>,
+) -> Result<bool> {
+    if contradictions.is_empty() || !matches!(target, MemoryTarget::Memory | MemoryTarget::User) {
+        return Ok(false);
+    }
+
+    let mut updated = existing.to_string();
+    let mut repaired_any = false;
+    let mut retracted_fact_keys = Vec::new();
+
+    for (current, proposed) in contradictions {
+        let Some(line_match) = existing
+            .lines()
+            .find(|line| strip_memory_markup(line) == current.display)
+        else {
+            continue;
+        };
+
+        let superseded_block = format!(
+            "## [SUPERSEDED]\n{}\n- uncertainty: superseded by {}",
+            line_match, proposed.display
+        );
+        if updated.contains(&superseded_block) {
+            continue;
+        }
+        updated = updated.replacen(line_match, &superseded_block, 1);
+        retracted_fact_keys.push(current.key.clone());
+        repaired_any = true;
+    }
+
+    if !repaired_any {
+        return Ok(false);
+    }
+
+    if !retracted_fact_keys.is_empty() {
+        history
+            .retract_memory_provenance_entries_for_fact_keys(
+                target.label(),
+                &retracted_fact_keys,
+                now_millis(),
+            )
+            .await?;
+    }
+
+    let next = append_content(&updated, incoming);
+    validate_memory_size(target, &next)?;
+    tokio::fs::write(path, &next).await?;
+
+    for (current, proposed) in contradictions {
+        let fact_keys = vec![current.key.clone()];
+        let content = format!(
+            "- superseded: {}\n  replacement: {}",
+            current.display, proposed.display
+        );
+        history
+            .record_memory_provenance(&MemoryProvenanceRecord {
+                id: &format!("memprov_{}", Uuid::new_v4()),
+                target: target.label(),
+                mode: "repaired_conflict",
+                source_kind: context.source_kind,
+                content: &content,
+                fact_keys: &fact_keys,
+                thread_id: context.thread_id,
+                task_id: context.task_id,
+                goal_run_id: context.goal_run_id,
+                created_at: now_millis(),
+                sign: true,
+            })
+            .await?;
+    }
+
+    if !retracted_fact_keys.is_empty() {
+        let content = retracted_fact_keys
+            .iter()
+            .map(|key| format!("- superseded fact_key: {key}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        history
+            .record_memory_provenance(&MemoryProvenanceRecord {
+                id: &format!("memprov_{}", Uuid::new_v4()),
+                target: target.label(),
+                mode: "remove",
+                source_kind: context.source_kind,
+                content: &content,
+                fact_keys: &retracted_fact_keys,
+                thread_id: context.thread_id,
+                task_id: context.task_id,
+                goal_run_id: context.goal_run_id,
+                created_at: now_millis(),
+                sign: true,
+            })
+            .await?;
+    }
+
+    record_memory_provenance(history, target, MemoryUpdateMode::Append, incoming, context).await?;
+    Ok(true)
 }
 
 pub(super) fn extract_memory_fact_candidates(content: &str) -> Vec<MemoryFactCandidate> {

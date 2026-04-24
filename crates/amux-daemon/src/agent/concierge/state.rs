@@ -31,7 +31,9 @@ pub(crate) struct ThreadSummary {
 #[derive(Clone)]
 pub(super) struct GoalRunSummary {
     pub(super) label: String,
+    pub(super) prompt: Option<String>,
     pub(super) status: GoalRunStatus,
     pub(super) updated_at: u64,
     pub(super) summary: Option<String>,
+    pub(super) latest_step_result: Option<String>,
 }

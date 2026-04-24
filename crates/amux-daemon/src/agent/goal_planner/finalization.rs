@@ -8,6 +8,13 @@ fn all_goal_steps_completed(goal_run: &GoalRun) -> bool {
             .all(|step| step.status == GoalRunStepStatus::Completed)
 }
 
+fn is_incomplete_goal_step_todo(todo: &TodoItem, goal_run: &GoalRun) -> bool {
+    todo.status != TodoStatus::Completed
+        && todo
+            .step_index
+            .is_some_and(|step_index| step_index < goal_run.steps.len())
+}
+
 fn final_review_prompt(goal_run: &GoalRun) -> String {
     let planned = goal_run
         .plan_summary
@@ -311,7 +318,7 @@ impl AgentEngine {
                 .get_todos(thread_id)
                 .await
                 .into_iter()
-                .filter(|item| item.status != TodoStatus::Completed)
+                .filter(|item| is_incomplete_goal_step_todo(item, &snapshot))
                 .collect::<Vec<_>>();
             if !incomplete_todos.is_empty() {
                 anyhow::bail!(
