@@ -1792,6 +1792,9 @@ async fn dispatch_tool_execution(
         }
         "list_tools" => execute_list_tools(args, agent, session_manager, agent_data_dir).await,
         "tool_search" => execute_tool_search(args, agent, session_manager, agent_data_dir).await,
+        "list_guidelines" => execute_list_guidelines(args, agent_data_dir).await,
+        "discover_guidelines" => execute_discover_guidelines(args, agent, session_id).await,
+        "read_guideline" => execute_read_guideline(args, agent_data_dir).await,
         "list_skills" => execute_list_skills(args, agent_data_dir, &agent.history).await,
         "discover_skills" => execute_discover_skills(args, agent, session_id).await,
         "semantic_query" => {

@@ -1558,6 +1558,33 @@ fn skill_discover_round_trip() {
 }
 
 #[test]
+fn guideline_discover_round_trip() {
+    let expected_session_id = SessionId::new_v4();
+    let msg = ClientMessage::GuidelineDiscover {
+        query: "coding task workflow".to_string(),
+        session_id: Some(expected_session_id),
+        limit: 3,
+        cursor: Some("cursor:coding-task".to_string()),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: ClientMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        ClientMessage::GuidelineDiscover {
+            query,
+            session_id,
+            limit,
+            cursor,
+        } => {
+            assert_eq!(query, "coding task workflow");
+            assert_eq!(session_id, Some(expected_session_id));
+            assert_eq!(limit, 3);
+            assert_eq!(cursor.as_deref(), Some("cursor:coding-task"));
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
+}
+
+#[test]
 fn skill_discover_result_round_trip() {
     let payload = sample_skill_discovery_result();
     let msg = DaemonMessage::SkillDiscoverResult {
@@ -1623,6 +1650,35 @@ fn skill_discover_result_round_trip() {
             assert_eq!(result.candidates[0].use_count, 12);
             assert_eq!(result.candidates[0].success_count, 10);
             assert_eq!(result.candidates[0].failure_count, 2);
+        }
+        other => panic!("unexpected variant: {:?}", other),
+    }
+}
+
+#[test]
+fn guideline_discover_result_round_trip() {
+    let mut payload = sample_skill_discovery_result();
+    payload.recommended_action = "read_guideline coding-task".to_string();
+    payload.candidates[0].skill_name = "coding-task".to_string();
+    payload.candidates[0].relative_path = "coding-task.md".to_string();
+    payload.candidates[0].source_kind = "guideline".to_string();
+    payload.candidates[0].recommended_action = "read_guideline coding-task".to_string();
+
+    let msg = DaemonMessage::GuidelineDiscoverResult {
+        result_json: serde_json::to_string(&payload).unwrap(),
+    };
+    let bytes = bincode::serialize(&msg).unwrap();
+    let decoded: DaemonMessage = bincode::deserialize(&bytes).unwrap();
+    match decoded {
+        DaemonMessage::GuidelineDiscoverResult { result_json } => {
+            let result: SkillDiscoveryResultPublic = serde_json::from_str(&result_json).unwrap();
+            assert_eq!(result.recommended_action, "read_guideline coding-task");
+            assert_eq!(result.candidates[0].skill_name, "coding-task");
+            assert_eq!(result.candidates[0].source_kind, "guideline");
+            assert_eq!(
+                result.candidates[0].recommended_action,
+                "read_guideline coding-task"
+            );
         }
         other => panic!("unexpected variant: {:?}", other),
     }

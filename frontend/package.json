@@ -78,6 +78,10 @@
       {
         "from": "dist/GETTING_STARTED.md",
         "to": "GETTING_STARTED.md"
+      },
+      {
+        "from": "../guidelines",
+        "to": "guidelines"
       }
     ],
     "win": {

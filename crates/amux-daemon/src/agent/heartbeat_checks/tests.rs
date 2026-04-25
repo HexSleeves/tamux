@@ -59,6 +59,7 @@ fn make_goal_run(id: &str, title: &str, status: GoalRunStatus, updated_at: u64) 
         total_prompt_tokens: 0,
         total_completion_tokens: 0,
         estimated_cost_usd: None,
+        model_usage: Vec::new(),
         autonomy_level: Default::default(),
         authorship_tag: None,
         launch_assignment_snapshot: Vec::new(),

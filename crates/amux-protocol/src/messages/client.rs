@@ -213,4 +213,5 @@ pub enum ClientMessage {
     AgentTextToSpeech { args_json: String },
     AgentGenerateImage { args_json: String },
     AgentGetGatewayConfig,
+    GuidelineDiscover { query: String, session_id: Option<SessionId>, limit: usize, #[serde(default)] cursor: Option<String> },
 }

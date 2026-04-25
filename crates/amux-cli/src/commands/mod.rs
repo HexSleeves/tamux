@@ -1,12 +1,13 @@
 pub(crate) mod common;
 mod core;
+mod guidelines;
 mod plugins;
 mod skills;
 mod tools;
 
 use anyhow::Result;
 
-use crate::cli::{Commands, PluginAction, SkillAction, ToolAction};
+use crate::cli::{Commands, GuidelineAction, PluginAction, SkillAction, ToolAction};
 use crate::update;
 
 pub(crate) async fn run_default() -> Result<()> {
@@ -16,12 +17,16 @@ pub(crate) async fn run_default() -> Result<()> {
 pub(crate) async fn run(command: Commands) -> Result<()> {
     if matches!(
         &command,
-        Commands::Skill { .. } | Commands::Plugin { .. } | Commands::Tool { .. }
+        Commands::Guideline { .. }
+            | Commands::Skill { .. }
+            | Commands::Plugin { .. }
+            | Commands::Tool { .. }
     ) {
         update::print_upgrade_notice_if_available(env!("CARGO_PKG_VERSION")).await;
     }
 
     match command {
+        Commands::Guideline { action } => run_guideline(action).await,
         Commands::Skill { action } => run_skill(action).await,
         Commands::Plugin { action } => run_plugin(action).await,
         Commands::Tool { action } => run_tool(action).await,
@@ -31,6 +36,10 @@ pub(crate) async fn run(command: Commands) -> Result<()> {
 
 async fn run_skill(action: SkillAction) -> Result<()> {
     skills::run(action).await
+}
+
+async fn run_guideline(action: GuidelineAction) -> Result<()> {
+    guidelines::run(action)
 }
 
 async fn run_plugin(action: PluginAction) -> Result<()> {

@@ -131,6 +131,13 @@ pub(crate) enum Commands {
         action: SkillAction,
     },
 
+    /// Manage local guidelines.
+    #[command(alias = "guidelines")]
+    Guideline {
+        #[command(subcommand)]
+        action: GuidelineAction,
+    },
+
     /// Inspect the tools currently available to the daemon agent.
     Tool {
         #[command(subcommand)]
@@ -285,6 +292,17 @@ pub(crate) enum InstallTarget {
         /// npm package spec or local package directory.
         package: String,
     },
+    /// Install a markdown guideline into the tamux guidelines directory.
+    Guideline {
+        /// Source markdown guideline file.
+        source: String,
+        /// Destination filename under the guidelines directory.
+        #[arg(long)]
+        name: Option<String>,
+        /// Overwrite an existing guideline with the same destination name.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -394,6 +412,28 @@ pub(crate) enum SkillAction {
     Publish {
         /// Skill name or variant ID.
         name: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum GuidelineAction {
+    /// Install a markdown guideline into the tamux guidelines directory.
+    Install {
+        /// Source markdown guideline file.
+        source: String,
+        /// Destination filename under the guidelines directory.
+        #[arg(long)]
+        name: Option<String>,
+        /// Overwrite an existing guideline with the same destination name.
+        #[arg(long)]
+        force: bool,
+    },
+    /// List installed guidelines from the tamux guidelines directory.
+    #[command(alias = "ls")]
+    List {
+        /// Emit raw JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -564,7 +604,9 @@ pub(crate) enum GoalAction {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cli, Commands, GoalAction, SkillAction, ThreadAction, ToolAction};
+    use super::{
+        Cli, Commands, GoalAction, GuidelineAction, SkillAction, ThreadAction, ToolAction,
+    };
     use clap::{CommandFactory, Parser};
 
     #[test]
@@ -584,6 +626,75 @@ mod tests {
                 assert_eq!(query, "debug panic");
                 assert_eq!(session, None);
                 assert_eq!(limit, 3);
+            }
+            other => panic!("parsed unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guideline_install_subcommand_parses_source_and_force() {
+        let cli = Cli::try_parse_from([
+            "tamux",
+            "guideline",
+            "install",
+            "/tmp/coding-task.md",
+            "--name",
+            "team-coding.md",
+            "--force",
+        ])
+        .expect("guideline install subcommand should parse");
+        match cli.command {
+            Some(Commands::Guideline {
+                action:
+                    GuidelineAction::Install {
+                        source,
+                        name,
+                        force,
+                    },
+            }) => {
+                assert_eq!(source, "/tmp/coding-task.md");
+                assert_eq!(name.as_deref(), Some("team-coding.md"));
+                assert!(force);
+            }
+            other => panic!("parsed unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guideline_list_subcommand_parses_json_flag() {
+        let cli = Cli::try_parse_from(["tamux", "guidelines", "list", "--json"])
+            .expect("guidelines list alias should parse");
+        match cli.command {
+            Some(Commands::Guideline {
+                action: GuidelineAction::List { json },
+            }) => assert!(json),
+            other => panic!("parsed unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn install_guideline_target_parses_source_and_name() {
+        let cli = Cli::try_parse_from([
+            "tamux",
+            "install",
+            "guideline",
+            "/tmp/coding-task.md",
+            "--name",
+            "team-coding.md",
+        ])
+        .expect("install guideline target should parse");
+        match cli.command {
+            Some(Commands::Install {
+                target:
+                    super::InstallTarget::Guideline {
+                        source,
+                        name,
+                        force,
+                    },
+            }) => {
+                assert_eq!(source, "/tmp/coding-task.md");
+                assert_eq!(name.as_deref(), Some("team-coding.md"));
+                assert!(!force);
             }
             other => panic!("parsed unexpected command: {other:?}"),
         }

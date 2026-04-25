@@ -67,6 +67,11 @@ pub(super) fn build_task_prompt(task: &AgentTask) -> String {
         prompt.push_str(&format!(
             "\nWhen calling update_todo for this main goal task, include \"goal_run_id\": \"{goal_run_id}\" and \"goal_step_id\": \"{goal_step_id}\" at the top level. These bind the full todo list to the current goal step; set the list once for this step, then only send the same items with status changes. Do not add, remove, rename, or reorder todos within the same step, and do not use item.step_index for goal-step routing."
         ));
+        if task.source == "goal_run" {
+            prompt.push_str(
+                "\nDo not call submit_goal_step_verdict from this implementation task; that tool is only for goal verification tasks. To signal this step is ready for review, complete all todos, create the required step completion marker artifact, and then finish your normal task response.",
+            );
+        }
     }
 
     if let Some(parent_task_id) = task.parent_task_id.as_deref() {
@@ -346,6 +351,18 @@ pub(super) fn skills_dir(data_dir: &std::path::Path) -> std::path::PathBuf {
         .join("skills")
 }
 
+pub(super) fn guidelines_dir(data_dir: &std::path::Path) -> std::path::PathBuf {
+    let default_agent_dir = agent_data_dir();
+    if data_dir == default_agent_dir {
+        return amux_protocol::tamux_guidelines_dir();
+    }
+
+    data_dir
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("guidelines")
+}
+
 fn builtin_skills_source_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills")
 }
@@ -574,6 +591,11 @@ mod tests {
                 && prompt.contains("only send the same items with status changes"),
             "main goal tasks should be told that goal-step todos are immutable except status"
         );
+        assert!(
+            prompt.contains("Do not call submit_goal_step_verdict")
+                && prompt.contains("finish your normal task response"),
+            "main goal tasks should be told how to signal completion without verifier-only tools"
+        );
     }
 
     #[test]
@@ -669,6 +691,7 @@ mod tests {
             total_prompt_tokens: 0,
             total_completion_tokens: 0,
             estimated_cost_usd: None,
+            model_usage: Vec::new(),
             autonomy_level: AutonomyLevel::Autonomous,
             authorship_tag: None,
             launch_assignment_snapshot: Vec::new(),

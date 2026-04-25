@@ -229,6 +229,7 @@ impl<'a> SendMessageRunner<'a> {
                 output_tokens,
                 &self.config.provider,
                 &self.provider_config.model,
+                generation_ms,
             )
             .await;
         self.provider_final_result = provider_final_result.clone();

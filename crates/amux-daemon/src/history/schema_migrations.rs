@@ -587,6 +587,12 @@ pub(super) fn apply_schema_migrations(
     ensure_column(
         connection,
         "goal_runs",
+        "model_usage_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(
+        connection,
+        "goal_runs",
         "autonomy_level",
         "TEXT NOT NULL DEFAULT 'aware'",
     )?;

@@ -860,6 +860,42 @@
     }
 
     #[test]
+    fn guideline_tools_are_exposed_with_expected_schema() {
+        let config = AgentConfig::default();
+        let temp_dir = std::env::temp_dir();
+        let tools = get_available_tools(&config, &temp_dir, false);
+        for name in ["list_guidelines", "discover_guidelines", "read_guideline"] {
+            assert!(
+                tools.iter().any(|tool| tool.function.name == name),
+                "{name} tool should be available"
+            );
+        }
+
+        let discover_guidelines = tools
+            .iter()
+            .find(|tool| tool.function.name == "discover_guidelines")
+            .expect("discover_guidelines tool should be available");
+        let properties = discover_guidelines
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("discover_guidelines schema should expose properties object");
+        assert!(properties.get("query").is_some(), "schema should include query");
+        assert!(properties.get("limit").is_some(), "schema should include limit");
+        assert!(properties.get("session").is_some(), "schema should include session");
+
+        let required = discover_guidelines
+            .function
+            .parameters
+            .get("required")
+            .and_then(|value| value.as_array())
+            .map(|items| items.iter().filter_map(|item| item.as_str()).collect::<Vec<_>>())
+            .expect("discover_guidelines should define required fields");
+        assert_eq!(required, vec!["query"]);
+    }
+
+    #[test]
     fn list_tools_tool_is_exposed_with_paging_schema() {
         let config = AgentConfig::default();
         let temp_dir = std::env::temp_dir();
