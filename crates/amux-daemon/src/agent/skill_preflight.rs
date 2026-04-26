@@ -1826,14 +1826,13 @@ mod tests {
     use crate::history::HistoryStore;
     use std::collections::VecDeque;
     use std::fs;
-    use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+    use std::sync::{Arc, Mutex as StdMutex};
     use tempfile::tempdir;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     fn current_dir_test_lock() -> &'static StdMutex<()> {
-        static LOCK: OnceLock<StdMutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| StdMutex::new(()))
+        crate::test_support::env_test_mutex()
     }
 
     fn write_skill(root: &std::path::Path, skill_dir: &str, content: &str) {

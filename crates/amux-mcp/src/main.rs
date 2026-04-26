@@ -420,12 +420,7 @@ fn decode_local_skill_cursor(cursor: Option<&str>) -> Result<Option<String>> {
 }
 
 async fn tool_read_skill(args: &Value) -> Result<Value> {
-    let skill = args
-        .get("skill")
-        .and_then(|v| v.as_str())
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("missing required parameter: skill"))?;
+    let skills = parse_read_skill_targets(args)?;
     let max_lines = args
         .get("max_lines")
         .and_then(|v| v.as_u64())
@@ -433,7 +428,66 @@ async fn tool_read_skill(args: &Value) -> Result<Value> {
         .clamp(20, 1000) as usize;
 
     let skills_root = tamux_skills_dir();
-    let skill_path = resolve_skill_path(&skills_root, skill)?;
+    let mut entries = Vec::with_capacity(skills.len());
+    for skill in &skills {
+        entries.push(read_skill_entry(&skills_root, skill, max_lines)?);
+    }
+
+    if skills.len() == 1 {
+        return Ok(entries
+            .into_iter()
+            .next()
+            .expect("single skill entry should be present"));
+    }
+
+    Ok(serde_json::json!({
+        "skills_root": skills_root,
+        "skills": entries,
+    }))
+}
+
+fn parse_read_skill_targets(args: &Value) -> Result<Vec<String>> {
+    let mut skills = Vec::new();
+
+    if let Some(skill) = args.get("skill") {
+        let skill = skill
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("skill must be a string"))?
+            .trim();
+        if skill.is_empty() {
+            anyhow::bail!("skill must not be empty");
+        }
+        skills.push(skill.to_string());
+    }
+
+    if let Some(values) = args.get("skills") {
+        let values = values
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("skills must be an array of strings"))?;
+        if values.is_empty() {
+            anyhow::bail!("skills must not be empty");
+        }
+        for (index, value) in values.iter().enumerate() {
+            let skill = value
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("skills[{index}] must be a string"))?
+                .trim();
+            if skill.is_empty() {
+                anyhow::bail!("skills[{index}] must not be empty");
+            }
+            skills.push(skill.to_string());
+        }
+    }
+
+    if skills.is_empty() {
+        anyhow::bail!("missing required parameter: skill or skills");
+    }
+
+    Ok(skills)
+}
+
+fn read_skill_entry(skills_root: &std::path::Path, skill: &str, max_lines: usize) -> Result<Value> {
+    let skill_path = resolve_skill_path(skills_root, skill)?;
     let content = std::fs::read_to_string(&skill_path)
         .with_context(|| format!("failed to read {}", skill_path.display()))?;
     let total_lines = content.lines().count();

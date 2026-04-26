@@ -287,7 +287,10 @@ impl AgentEngine {
             .and_then(|value| value.as_str())
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        let payload = args.get("payload").cloned().unwrap_or(serde_json::Value::Null);
+        let payload = args
+            .get("payload")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
 
         let fired = self
             .maybe_fire_event_trigger(event_family, event_kind, state, thread_id, payload.clone())

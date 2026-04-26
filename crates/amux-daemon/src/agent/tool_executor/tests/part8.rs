@@ -1155,6 +1155,77 @@ async fn discover_skills_tool_returns_discovery_result() {
 }
 
 #[tokio::test]
+async fn read_skill_accepts_multiple_skills_in_one_call() {
+    let root = tempdir().expect("tempdir");
+    let agent_data_dir = root.path().join("agent");
+    fs::create_dir_all(&agent_data_dir).expect("create agent data dir");
+    let generated_dir = root.path().join("skills").join("generated");
+    fs::create_dir_all(&generated_dir).expect("create generated dir");
+    fs::write(
+        generated_dir.join("systematic-debugging.md"),
+        "# Systematic Debugging\nUse this workflow to debug failures.\n",
+    )
+    .expect("write first skill");
+    fs::write(
+        generated_dir.join("test-driven-development.md"),
+        "# Test-Driven Development\nWrite the failing test first.\n",
+    )
+    .expect("write second skill");
+
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-read-multiple-skills".to_string(),
+        ToolFunction {
+            name: "read_skill".to_string(),
+            arguments: serde_json::json!({
+                "skills": ["systematic-debugging", "test-driven-development"],
+                "max_lines": 50
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-read-multiple-skills",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        &agent_data_dir,
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(
+        !result.is_error,
+        "read_skill should succeed for multiple skills: {}",
+        result.content
+    );
+    assert!(
+        result.content.contains("systematic-debugging.md"),
+        "read_skill should include the first skill path: {}",
+        result.content
+    );
+    assert!(
+        result.content.contains("test-driven-development.md"),
+        "read_skill should include the second skill path: {}",
+        result.content
+    );
+    assert!(
+        result.content.contains("# Systematic Debugging")
+            && result.content.contains("# Test-Driven Development"),
+        "read_skill should include both skill contents: {}",
+        result.content
+    );
+}
+
+#[tokio::test]
 async fn read_skill_uses_workspace_root_when_session_is_absent() {
     let _cwd_lock = current_dir_test_lock().lock().expect("cwd lock");
     let original_cwd = std::env::current_dir().expect("current dir");

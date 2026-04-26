@@ -193,6 +193,12 @@ pub(crate) enum Commands {
         action: GoalAction,
     },
 
+    /// Inspect and manage workspace board tasks.
+    Workspace {
+        #[command(subcommand)]
+        action: WorkspaceAction,
+    },
+
     /// Send a direct message to svarog or Rarog from the CLI.
     Dm {
         /// Continue a specific thread.
@@ -622,10 +628,185 @@ pub(crate) enum GoalAction {
     },
 }
 
+#[derive(Debug, Subcommand)]
+pub(crate) enum WorkspaceAction {
+    /// List workspace board tasks.
+    #[command(alias = "ls")]
+    List {
+        /// Workspace ID.
+        #[arg(long, default_value = "main")]
+        workspace: String,
+        /// Include soft-deleted tasks.
+        #[arg(long)]
+        include_deleted: bool,
+        /// Filter by status: todo, in-progress, in-review, done.
+        #[arg(long)]
+        status: Option<String>,
+        /// Filter by priority: low, normal, high, urgent.
+        #[arg(long)]
+        priority: Option<String>,
+        /// Filter by assignee: user, svarog, agent:id, subagent:id, or none.
+        #[arg(long)]
+        assignee: Option<String>,
+        /// Filter by reviewer: user, svarog, agent:id, subagent:id, or none.
+        #[arg(long)]
+        reviewer: Option<String>,
+        /// Emit raw JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show one workspace task.
+    Get {
+        /// Workspace task ID.
+        task_id: String,
+        /// Emit raw JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create a workspace task.
+    New {
+        /// Task type: thread or goal.
+        task_type: String,
+        /// Task title.
+        title: String,
+        /// Task description.
+        description: String,
+        /// Workspace ID.
+        #[arg(long, default_value = "main")]
+        workspace: String,
+        /// Optional definition of done.
+        #[arg(long)]
+        dod: Option<String>,
+        /// Priority: low, normal, high, urgent.
+        #[arg(long, default_value = "low")]
+        priority: String,
+        /// Assignee: svarog, agent:id, subagent:id, or none.
+        #[arg(long)]
+        assignee: Option<String>,
+        /// Reviewer: user, svarog, agent:id, subagent:id, or none.
+        #[arg(long, default_value = "user")]
+        reviewer: String,
+        /// Emit raw JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Update editable workspace task fields.
+    Update {
+        /// Workspace task ID.
+        task_id: String,
+        /// Replace task title.
+        #[arg(long)]
+        title: Option<String>,
+        /// Replace task description.
+        #[arg(long)]
+        description: Option<String>,
+        /// Replace definition of done.
+        #[arg(long)]
+        dod: Option<String>,
+        /// Clear definition of done.
+        #[arg(long, conflicts_with = "dod")]
+        clear_dod: bool,
+        /// Priority: low, normal, high, urgent.
+        #[arg(long)]
+        priority: Option<String>,
+        /// Assignee: svarog, agent:id, subagent:id, or none.
+        #[arg(long)]
+        assignee: Option<String>,
+        /// Reviewer: user, svarog, agent:id, subagent:id, or none.
+        #[arg(long)]
+        reviewer: Option<String>,
+        /// Emit raw JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show or set the workspace-level operator.
+    Operator {
+        /// Workspace ID.
+        #[arg(long, default_value = "main")]
+        workspace: String,
+        /// Optional operator: user or svarog.
+        operator: Option<String>,
+        /// Emit raw JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Assign task to an agent/subagent, or clear with none.
+    Assign {
+        task_id: String,
+        assignee: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set task reviewer, or clear with none.
+    Reviewer {
+        task_id: String,
+        reviewer: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Run one workspace task.
+    Run {
+        task_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Pause one workspace task.
+    Pause {
+        task_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Stop one workspace task.
+    Stop {
+        task_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Move task to a board status.
+    Move {
+        task_id: String,
+        status: String,
+        /// Insert before tasks at this sort order in the target status.
+        #[arg(long)]
+        sort_order: Option<i64>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Submit a review verdict.
+    Review {
+        task_id: String,
+        verdict: String,
+        message: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Soft-delete one workspace task.
+    Delete {
+        task_id: String,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List workspace task notices.
+    Notices {
+        /// Workspace ID.
+        #[arg(long, default_value = "main")]
+        workspace: String,
+        /// Optional task ID filter.
+        #[arg(long)]
+        task: Option<String>,
+        /// Emit raw JSON instead of human-readable output.
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         Cli, Commands, GoalAction, GuidelineAction, SkillAction, ThreadAction, ToolAction,
+        WorkspaceAction,
     };
     use clap::{CommandFactory, Parser};
 
@@ -1048,6 +1229,171 @@ mod tests {
                 assert!(yes);
             }
             other => panic!("expected goal delete command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn workspace_new_subcommand_parses() {
+        let cli = Cli::try_parse_from([
+            "tamux",
+            "workspace",
+            "new",
+            "goal",
+            "Ship board",
+            "Implement workspace board",
+            "--workspace",
+            "main",
+            "--assignee",
+            "svarog",
+            "--reviewer",
+            "user",
+            "--priority",
+            "high",
+        ])
+        .expect("workspace new subcommand should parse");
+        match cli.command {
+            Some(Commands::Workspace {
+                action:
+                    WorkspaceAction::New {
+                        task_type,
+                        title,
+                        description,
+                        workspace,
+                        assignee,
+                        reviewer,
+                        priority,
+                        ..
+                    },
+            }) => {
+                assert_eq!(task_type, "goal");
+                assert_eq!(title, "Ship board");
+                assert_eq!(description, "Implement workspace board");
+                assert_eq!(workspace, "main");
+                assert_eq!(assignee.as_deref(), Some("svarog"));
+                assert_eq!(reviewer, "user");
+                assert_eq!(priority, "high");
+            }
+            other => panic!("expected workspace new command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn workspace_list_subcommand_parses_filters() {
+        let cli = Cli::try_parse_from([
+            "tamux",
+            "workspace",
+            "list",
+            "--workspace",
+            "main",
+            "--status",
+            "in-review",
+            "--priority",
+            "urgent",
+            "--assignee",
+            "svarog",
+            "--reviewer",
+            "user",
+            "--include-deleted",
+        ])
+        .expect("workspace list filters should parse");
+        match cli.command {
+            Some(Commands::Workspace {
+                action:
+                    WorkspaceAction::List {
+                        workspace,
+                        include_deleted,
+                        status,
+                        priority,
+                        assignee,
+                        reviewer,
+                        ..
+                    },
+            }) => {
+                assert_eq!(workspace, "main");
+                assert!(include_deleted);
+                assert_eq!(status.as_deref(), Some("in-review"));
+                assert_eq!(priority.as_deref(), Some("urgent"));
+                assert_eq!(assignee.as_deref(), Some("svarog"));
+                assert_eq!(reviewer.as_deref(), Some("user"));
+            }
+            other => panic!("expected workspace list command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn workspace_update_subcommand_parses_editable_fields() {
+        let cli = Cli::try_parse_from([
+            "tamux",
+            "workspace",
+            "update",
+            "wtask_1",
+            "--title",
+            "New title",
+            "--description",
+            "New description",
+            "--dod",
+            "Tests pass",
+            "--priority",
+            "urgent",
+            "--assignee",
+            "svarog",
+            "--reviewer",
+            "none",
+        ])
+        .expect("workspace update subcommand should parse");
+        match cli.command {
+            Some(Commands::Workspace {
+                action:
+                    WorkspaceAction::Update {
+                        task_id,
+                        title,
+                        description,
+                        dod,
+                        priority,
+                        assignee,
+                        reviewer,
+                        ..
+                    },
+            }) => {
+                assert_eq!(task_id, "wtask_1");
+                assert_eq!(title.as_deref(), Some("New title"));
+                assert_eq!(description.as_deref(), Some("New description"));
+                assert_eq!(dod.as_deref(), Some("Tests pass"));
+                assert_eq!(priority.as_deref(), Some("urgent"));
+                assert_eq!(assignee.as_deref(), Some("svarog"));
+                assert_eq!(reviewer.as_deref(), Some("none"));
+            }
+            other => panic!("expected workspace update command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn workspace_move_subcommand_parses_sort_order() {
+        let cli = Cli::try_parse_from([
+            "tamux",
+            "workspace",
+            "move",
+            "wtask_1",
+            "in-review",
+            "--sort-order",
+            "4",
+        ])
+        .expect("workspace move subcommand should parse");
+        match cli.command {
+            Some(Commands::Workspace {
+                action:
+                    WorkspaceAction::Move {
+                        task_id,
+                        status,
+                        sort_order,
+                        ..
+                    },
+            }) => {
+                assert_eq!(task_id, "wtask_1");
+                assert_eq!(status, "in-review");
+                assert_eq!(sort_order, Some(4));
+            }
+            other => panic!("expected workspace move command, got {other:?}"),
         }
     }
 

@@ -394,15 +394,7 @@ async fn execute_read_skill(
     thread_id: &str,
     task_id: Option<&str>,
 ) -> Result<String> {
-    let skill = args
-        .get("skill")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| anyhow::anyhow!("missing 'skill' argument"))?
-        .trim();
-    if skill.is_empty() {
-        return Err(anyhow::anyhow!("'skill' must not be empty"));
-    }
-
+    let skills = parse_read_skill_targets(args)?;
     let max_lines = args
         .get("max_lines")
         .and_then(|value| value.as_u64())
@@ -413,6 +405,77 @@ async fn execute_read_skill(
     let context_tags =
         resolve_skill_context_tags(agent.workspace_root.as_ref(), session_manager, session_id)
             .await;
+
+    let mut bodies = Vec::with_capacity(skills.len());
+    for skill in &skills {
+        bodies.push(
+            read_single_skill(
+                skill,
+                max_lines,
+                agent,
+                history,
+                thread_id,
+                task_id,
+                &skills_root,
+                &context_tags,
+            )
+            .await?,
+        );
+    }
+
+    Ok(bodies.join("\n\n---\n\n"))
+}
+
+fn parse_read_skill_targets(args: &serde_json::Value) -> Result<Vec<String>> {
+    let mut skills = Vec::new();
+
+    if let Some(skill) = args.get("skill") {
+        let skill = skill
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("'skill' must be a string"))?
+            .trim();
+        if skill.is_empty() {
+            return Err(anyhow::anyhow!("'skill' must not be empty"));
+        }
+        skills.push(skill.to_string());
+    }
+
+    if let Some(values) = args.get("skills") {
+        let values = values
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("'skills' must be an array of strings"))?;
+        if values.is_empty() {
+            return Err(anyhow::anyhow!("'skills' must not be empty"));
+        }
+        for (index, value) in values.iter().enumerate() {
+            let skill = value
+                .as_str()
+                .ok_or_else(|| anyhow::anyhow!("'skills[{index}]' must be a string"))?
+                .trim();
+            if skill.is_empty() {
+                return Err(anyhow::anyhow!("'skills[{index}]' must not be empty"));
+            }
+            skills.push(skill.to_string());
+        }
+    }
+
+    if skills.is_empty() {
+        anyhow::bail!("missing 'skill' or 'skills' argument");
+    }
+
+    Ok(skills)
+}
+
+async fn read_single_skill(
+    skill: &str,
+    max_lines: usize,
+    agent: &AgentEngine,
+    history: &HistoryStore,
+    thread_id: &str,
+    task_id: Option<&str>,
+    skills_root: &std::path::Path,
+    context_tags: &[String],
+) -> Result<String> {
     let variant = history.resolve_skill_variant(skill, &context_tags).await?;
     let candidate_variants = match variant.as_ref() {
         Some(selected) => history

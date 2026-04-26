@@ -1717,6 +1717,22 @@ async fn dispatch_tool_execution(
         | "run_snippet" => {
             execute_workspace_tool(prepared.tool_name.as_str(), args, event_tx).await
         }
+        "workspace_get_settings"
+        | "workspace_list_tasks"
+        | "workspace_get_task"
+        | "workspace_list_notices"
+        | "workspace_set_operator"
+        | "workspace_create_task"
+        | "workspace_update_task"
+        | "workspace_move_task"
+        | "workspace_run_task"
+        | "workspace_pause_task"
+        | "workspace_stop_task"
+        | "workspace_delete_task"
+        | "workspace_submit_review"
+        | "workspace_submit_completion" => {
+            execute_workspace_task_tool(prepared.tool_name.as_str(), args, agent).await
+        }
         "bash_command" => {
             match execute_bash_command(
                 dispatch_args,

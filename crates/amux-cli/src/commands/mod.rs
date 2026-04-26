@@ -4,10 +4,14 @@ mod guidelines;
 mod plugins;
 mod skills;
 mod tools;
+mod workspace;
+mod workspace_filters;
 
 use anyhow::Result;
 
-use crate::cli::{Commands, GuidelineAction, PluginAction, SkillAction, ToolAction};
+use crate::cli::{
+    Commands, GuidelineAction, PluginAction, SkillAction, ToolAction, WorkspaceAction,
+};
 use crate::update;
 
 pub(crate) async fn run_default() -> Result<()> {
@@ -21,6 +25,7 @@ pub(crate) async fn run(command: Commands) -> Result<()> {
             | Commands::Skill { .. }
             | Commands::Plugin { .. }
             | Commands::Tool { .. }
+            | Commands::Workspace { .. }
     ) {
         update::print_upgrade_notice_if_available(env!("CARGO_PKG_VERSION")).await;
     }
@@ -30,6 +35,7 @@ pub(crate) async fn run(command: Commands) -> Result<()> {
         Commands::Skill { action } => run_skill(action).await,
         Commands::Plugin { action } => run_plugin(action).await,
         Commands::Tool { action } => run_tool(action).await,
+        Commands::Workspace { action } => run_workspace(action).await,
         other => core::run(other).await,
     }
 }
@@ -48,6 +54,10 @@ async fn run_plugin(action: PluginAction) -> Result<()> {
 
 async fn run_tool(action: ToolAction) -> Result<()> {
     tools::run(action).await
+}
+
+async fn run_workspace(action: WorkspaceAction) -> Result<()> {
+    workspace::run(action).await
 }
 
 #[cfg(test)]

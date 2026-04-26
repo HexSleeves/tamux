@@ -380,14 +380,18 @@ fn add_available_tools_part_b(
 
     tools.push(tool_def(
         "read_skill",
-        "Read a local skill document before acting. Accepts a skill name, relative path, or generated skill filename.",
+        "Read one or more local skill documents before acting. Accepts skill names, relative paths, or generated skill filenames.",
         serde_json::json!({
             "type": "object",
             "properties": {
                 "skill": { "type": "string", "description": "Skill name, file stem, or relative path under the tamux skills directory" },
+                "skills": {
+                    "type": "array",
+                    "description": "Skill names, file stems, or relative paths to read in one call",
+                    "items": { "type": "string" }
+                },
                 "max_lines": { "type": "integer", "description": "Max lines to read (default: 200)" }
-            },
-            "required": ["skill"]
+            }
         }),
     ));
 

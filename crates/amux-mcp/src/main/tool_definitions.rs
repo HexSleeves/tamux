@@ -314,14 +314,18 @@ pub(super) fn tool_definitions() -> Value {
         },
         {
             "name": "read_skill",
-            "description": "Read a local tamux skill document by name, stem, or relative path under the skills directory.",
+            "description": "Read one or more local tamux skill documents by name, stem, or relative path under the skills directory.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "skill": { "type": "string", "description": "Skill name, file stem, or relative path" },
+                    "skills": {
+                        "type": "array",
+                        "description": "Skill names, file stems, or relative paths to read in one call",
+                        "items": { "type": "string" }
+                    },
                     "max_lines": { "type": "integer", "description": "Maximum lines to read" }
-                },
-                "required": ["skill"]
+                }
             }
         },
         {
@@ -855,6 +859,51 @@ mod tests {
                 .is_some_and(|properties| properties.contains_key("thread_id")),
             "search_memory should expose thread_id for thread-scoped lookup"
         );
+    }
+
+    #[test]
+    fn read_skill_definition_accepts_multiple_skills() {
+        let defs = tool_definitions();
+        let tools = defs
+            .as_array()
+            .expect("tool definitions should be an array");
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "read_skill")
+            .expect("read_skill tool definition should be present");
+        let properties = tool["inputSchema"]["properties"]
+            .as_object()
+            .expect("read_skill should expose an object schema");
+
+        assert!(
+            properties.contains_key("skills"),
+            "read_skill should expose a skills array for multi-read calls"
+        );
+        assert_eq!(
+            properties["skills"]["items"]["type"], "string",
+            "read_skill skills entries should be strings"
+        );
+    }
+
+    #[test]
+    fn read_skill_definition_avoids_top_level_combinators() {
+        let defs = tool_definitions();
+        let tools = defs
+            .as_array()
+            .expect("tool definitions should be an array");
+        let tool = tools
+            .iter()
+            .find(|tool| tool["name"] == "read_skill")
+            .expect("read_skill tool definition should be present");
+        let schema = &tool["inputSchema"];
+
+        assert_eq!(schema["type"], "object");
+        for forbidden in ["oneOf", "anyOf", "allOf", "enum", "not"] {
+            assert!(
+                !schema.get(forbidden).is_some(),
+                "read_skill schema must not expose top-level {forbidden}"
+            );
+        }
     }
 
     #[test]

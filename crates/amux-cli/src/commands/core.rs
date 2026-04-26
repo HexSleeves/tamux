@@ -27,6 +27,7 @@ pub(crate) fn should_check_for_updates(command: &Commands) -> bool {
             | Commands::Settings { .. }
             | Commands::Thread { .. }
             | Commands::Goal { .. }
+            | Commands::Workspace { .. }
             | Commands::Dm { .. }
             | Commands::Setup
             | Commands::Ping
@@ -1664,6 +1665,7 @@ pub(crate) async fn run(command: Commands) -> Result<()> {
                 );
             }
         },
+        Commands::Workspace { .. } => unreachable!("workspace commands are handled before core"),
         Commands::Dm {
             thread,
             session,

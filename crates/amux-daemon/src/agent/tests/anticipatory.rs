@@ -2010,9 +2010,9 @@ async fn event_trigger_defaults_can_be_seeded_and_listed() {
         .any(|row| row["event_kind"] == "subagent_health"));
     assert!(rows.iter().any(|row| row["event_kind"] == "file_changed"));
     assert!(rows.iter().any(|row| row["event_kind"] == "disk_pressure"));
-    assert!(rows.iter().any(|row| {
-        row["event_kind"] == "file_changed" && row["source"] == "packaged_default"
-    }));
+    assert!(rows
+        .iter()
+        .any(|row| { row["event_kind"] == "file_changed" && row["source"] == "packaged_default" }));
     assert!(rows.iter().any(|row| {
         row["event_kind"] == "disk_pressure" && row["source"] == "packaged_default"
     }));
@@ -2306,7 +2306,8 @@ async fn webhook_listener_rejects_invalid_signature() {
         .expect("system time should be after epoch")
         .as_millis() as u64;
 
-    let response = post_webhook_event(&addr, &body, Some(timestamp_ms), Some("sha256=badbadbad")).await;
+    let response =
+        post_webhook_event(&addr, &body, Some(timestamp_ms), Some("sha256=badbadbad")).await;
     assert!(response.starts_with("HTTP/1.1 401 Unauthorized"));
     assert!(engine.tasks.lock().await.is_empty());
 
@@ -2355,7 +2356,10 @@ async fn seeded_default_file_changed_trigger_enqueues_task_without_manual_regist
         .await
         .expect("event log query should succeed");
     assert_eq!(event_rows.len(), 1);
-    assert_eq!(event_rows[0].thread_id.as_deref(), Some("thread-fs-default-1"));
+    assert_eq!(
+        event_rows[0].thread_id.as_deref(),
+        Some("thread-fs-default-1")
+    );
     assert!(event_rows[0].payload_json.contains("src/lib.rs"));
 }
 
@@ -2390,8 +2394,14 @@ async fn seeded_default_disk_pressure_trigger_queues_approval_without_manual_reg
     let approval_task = tasks.front().expect("expected approval-gated event task");
     assert_eq!(approval_task.source, "event_trigger");
     assert_eq!(approval_task.status, TaskStatus::AwaitingApproval);
-    assert_eq!(approval_task.thread_id.as_deref(), Some("thread-disk-default-1"));
-    assert_eq!(approval_task.sub_agent_def_id.as_deref(), Some("weles_builtin"));
+    assert_eq!(
+        approval_task.thread_id.as_deref(),
+        Some("thread-disk-default-1")
+    );
+    assert_eq!(
+        approval_task.sub_agent_def_id.as_deref(),
+        Some("weles_builtin")
+    );
     let approval_id = approval_task
         .awaiting_approval_id
         .clone()
@@ -2403,10 +2413,15 @@ async fn seeded_default_disk_pressure_trigger_queues_approval_without_manual_reg
     let handled = engine
         .handle_task_approval_resolution(&approval_id, amux_protocol::ApprovalDecision::ApproveOnce)
         .await;
-    assert!(handled, "approval resolution should resume the seeded default event task");
+    assert!(
+        handled,
+        "approval resolution should resume the seeded default event task"
+    );
 
     let tasks = engine.tasks.lock().await;
-    let resumed = tasks.front().expect("task should still exist after approval");
+    let resumed = tasks
+        .front()
+        .expect("task should still exist after approval");
     assert_eq!(resumed.status, TaskStatus::Queued);
     assert!(resumed.awaiting_approval_id.is_none());
 }
