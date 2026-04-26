@@ -367,6 +367,10 @@ fn builtin_skills_source_dir() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../skills")
 }
 
+fn builtin_guidelines_source_dir() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../guidelines")
+}
+
 /// Seed built-in skill documents into `~/.tamux/skills/`.
 pub(super) fn seed_builtin_skills(agent_data_dir: &std::path::Path) {
     let root = skills_dir(agent_data_dir);
@@ -377,6 +381,26 @@ pub(super) fn seed_builtin_skills(agent_data_dir: &std::path::Path) {
         Ok(count) => tracing::debug!("seeded {} built-in skills into {}", count, target.display()),
         Err(e) => tracing::warn!(
             "failed to seed built-in skills from {} to {}: {e}",
+            source.display(),
+            target.display()
+        ),
+    }
+}
+
+/// Seed missing built-in guideline documents into `~/.tamux/guidelines/`.
+pub(super) fn seed_builtin_guidelines(agent_data_dir: &std::path::Path) {
+    let root = guidelines_dir(agent_data_dir);
+    let source = builtin_guidelines_source_dir();
+    let target = root;
+
+    match seed_guidelines_tree(&source, &target) {
+        Ok(count) => tracing::debug!(
+            "seeded {} missing built-in guidelines into {}",
+            count,
+            target.display()
+        ),
+        Err(e) => tracing::warn!(
+            "failed to seed built-in guidelines from {} to {}: {e}",
             source.display(),
             target.display()
         ),
@@ -396,6 +420,36 @@ fn seed_skills_tree(source: &std::path::Path, target: &std::path::Path) -> std::
         if file_type.is_dir() {
             count += seed_skills_tree(&source_path, &target_path)?;
         } else if file_type.is_file() {
+            if let Some(parent) = target_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(&source_path, &target_path)?;
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
+fn seed_guidelines_tree(
+    source: &std::path::Path,
+    target: &std::path::Path,
+) -> std::io::Result<usize> {
+    std::fs::create_dir_all(target)?;
+
+    let mut count = 0usize;
+    for entry in std::fs::read_dir(source)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+
+        if file_type.is_dir() {
+            count += seed_guidelines_tree(&source_path, &target_path)?;
+        } else if file_type.is_file() {
+            if target_path.exists() {
+                continue;
+            }
             if let Some(parent) = target_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -765,6 +819,32 @@ mod tests {
         assert!(
             builtin_root.join("tamux-mcp").join("README.md").exists(),
             "expected built-in skills seed to copy nested markdown docs"
+        );
+    }
+
+    #[test]
+    fn seed_builtin_guidelines_copies_missing_repo_guidelines_without_overwriting() {
+        let temp = tempdir().expect("tempdir should succeed");
+        let agent_data_dir = temp.path().join("agent");
+        let guidelines_root = guidelines_dir(&agent_data_dir);
+        std::fs::create_dir_all(&guidelines_root).expect("create guidelines root");
+        std::fs::write(
+            guidelines_root.join("coding-task.md"),
+            "# Operator Custom Coding Guideline\n",
+        )
+        .expect("write existing guideline");
+
+        seed_builtin_guidelines(&agent_data_dir);
+
+        assert!(
+            guidelines_root.join("research-task.md").exists(),
+            "expected daemon guideline seed to copy missing bundled guideline docs"
+        );
+        assert_eq!(
+            std::fs::read_to_string(guidelines_root.join("coding-task.md"))
+                .expect("read existing guideline"),
+            "# Operator Custom Coding Guideline\n",
+            "daemon guideline seed must not overwrite operator customized guidelines"
         );
     }
 

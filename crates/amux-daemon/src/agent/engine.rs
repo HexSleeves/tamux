@@ -177,6 +177,7 @@ pub struct AgentEngine {
     pub gateway_inflight_channels: Mutex<HashSet<String>>,
     /// Queue of externally injected gateway messages (e.g. linked WhatsApp sidecar).
     pub gateway_injected_messages: Mutex<VecDeque<gateway::IncomingMessage>>,
+    pub(super) webhook_listener_addr: RwLock<Option<String>>,
     /// External agent runners for openclaw/hermes backends.
     pub external_runners: RwLock<HashMap<String, external_runner::ExternalAgentRunner>>,
     pub(super) subagent_runtime: RwLock<HashMap<String, SubagentRuntimeStats>>,
@@ -387,6 +388,7 @@ impl AgentEngine {
             gateway_seen_ids: Mutex::new(Vec::new()),
             gateway_inflight_channels: Mutex::new(HashSet::new()),
             gateway_injected_messages: Mutex::new(VecDeque::new()),
+            webhook_listener_addr: RwLock::new(None),
             external_runners: RwLock::new(runners),
             subagent_runtime: RwLock::new(HashMap::new()),
             trusted_weles_tasks: RwLock::new(HashSet::new()),

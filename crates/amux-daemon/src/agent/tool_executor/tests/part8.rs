@@ -1941,6 +1941,111 @@ async fn list_tools_tool_returns_paginated_catalog() {
 }
 
 #[tokio::test]
+async fn list_triggers_tool_surfaces_packaged_defaults_without_manual_seeding() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-list-triggers-defaults".to_string(),
+        ToolFunction {
+            name: "list_triggers".to_string(),
+            arguments: serde_json::json!({}).to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-list-triggers-defaults",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(
+        !result.is_error,
+        "list_triggers should succeed: {}",
+        result.content
+    );
+    let payload: serde_json::Value =
+        serde_json::from_str(&result.content).expect("list_triggers should return JSON");
+    let rows = payload.as_array().expect("list_triggers should return array payload");
+    assert!(rows.iter().any(|row| row["event_kind"] == "weles_health"));
+    assert!(rows.iter().any(|row| row["event_kind"] == "subagent_health"));
+    assert!(rows.iter().any(|row| row["event_kind"] == "file_changed"));
+    assert!(rows.iter().any(|row| row["event_kind"] == "disk_pressure"));
+    assert!(rows.iter().any(|row| {
+        row["event_kind"] == "file_changed" && row["source"] == "packaged_default"
+    }));
+    assert!(rows.iter().any(|row| {
+        row["event_kind"] == "disk_pressure" && row["source"] == "packaged_default"
+    }));
+}
+
+#[tokio::test]
+async fn ingest_webhook_event_tool_routes_seeded_default_trigger_without_manual_seeding() {
+    let root = tempdir().expect("tempdir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager.clone(), AgentConfig::default(), root.path()).await;
+    let (event_tx, _) = broadcast::channel(8);
+
+    let tool_call = ToolCall::with_default_weles_review(
+        "tool-ingest-webhook-event".to_string(),
+        ToolFunction {
+            name: "ingest_webhook_event".to_string(),
+            arguments: serde_json::json!({
+                "event_family": "filesystem",
+                "event_kind": "file_changed",
+                "state": "detected",
+                "thread_id": "thread-tool-webhook-1",
+                "payload": {
+                    "path": "src/lib.rs"
+                }
+            })
+            .to_string(),
+        },
+    );
+
+    let result = execute_tool(
+        &tool_call,
+        &engine,
+        "thread-tool-webhook-1",
+        None,
+        &manager,
+        None,
+        &event_tx,
+        root.path(),
+        &engine.http_client,
+        None,
+    )
+    .await;
+
+    assert!(
+        !result.is_error,
+        "ingest_webhook_event should succeed: {}",
+        result.content
+    );
+    let payload: serde_json::Value =
+        serde_json::from_str(&result.content).expect("ingest_webhook_event should return JSON");
+    assert_eq!(payload["status"], "accepted");
+    assert_eq!(payload["fired"].as_u64(), Some(1));
+
+    let tasks = engine.tasks.lock().await;
+    assert_eq!(tasks.len(), 1);
+    let task = tasks.front().expect("expected seeded default event task");
+    assert_eq!(task.status, TaskStatus::Queued);
+    assert_eq!(task.thread_id.as_deref(), Some("thread-tool-webhook-1"));
+    assert!(task.description.contains("src/lib.rs"));
+}
+
+#[tokio::test]
 async fn tool_search_returns_ranked_matches() {
     let root = tempdir().expect("tempdir");
     let manager = SessionManager::new_test(root.path()).await;

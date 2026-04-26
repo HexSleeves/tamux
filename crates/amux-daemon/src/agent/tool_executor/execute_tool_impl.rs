@@ -1688,6 +1688,7 @@ async fn dispatch_tool_execution(
             execute_submit_goal_step_verdict(args, agent, task_id).await
         }
         "list_triggers" => execute_list_triggers(args, agent).await,
+        "ingest_webhook_event" => execute_ingest_webhook_event(args, agent).await,
         "add_trigger" => execute_add_trigger(args, agent).await,
         "show_dreams" => execute_show_dreams(args, agent).await,
         "show_harness_state" => {

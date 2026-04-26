@@ -39,7 +39,7 @@ async fn run_skill(action: SkillAction) -> Result<()> {
 }
 
 async fn run_guideline(action: GuidelineAction) -> Result<()> {
-    guidelines::run(action)
+    guidelines::run(action).await
 }
 
 async fn run_plugin(action: PluginAction) -> Result<()> {

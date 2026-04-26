@@ -513,6 +513,10 @@ fn default_command_items() -> Vec<CommandItem> {
             description: "Seed community skill install command".into(),
         },
         CommandItem {
+            command: "guidelines install".into(),
+            description: "Seed custom guideline install command".into(),
+        },
+        CommandItem {
             command: "quit".into(),
             description: "Exit TUI".into(),
         },

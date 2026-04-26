@@ -170,6 +170,7 @@ async fn make_test_engine(
         gateway_seen_ids: Mutex::new(Vec::new()),
         gateway_inflight_channels: Mutex::new(HashSet::new()),
         gateway_injected_messages: Mutex::new(VecDeque::new()),
+        webhook_listener_addr: RwLock::new(None),
         whatsapp_link: Arc::new(super::whatsapp_link::WhatsAppLinkRuntime::new()),
         external_runners: RwLock::new(HashMap::new()),
         subagent_runtime: RwLock::new(HashMap::new()),

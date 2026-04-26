@@ -103,6 +103,7 @@ mod thread_pins;
 mod tool_synthesis;
 pub(crate) mod weles_governance;
 mod weles_health;
+mod webhook_listener;
 mod whatsapp_link;
 mod whatsapp_native;
 mod work_context;

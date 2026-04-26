@@ -615,6 +615,7 @@ impl TuiModel {
             crate::state::goal_workspace::GoalWorkspaceMode::Goal,
             crate::state::goal_workspace::GoalWorkspaceMode::Files,
             crate::state::goal_workspace::GoalWorkspaceMode::Progress,
+            crate::state::goal_workspace::GoalWorkspaceMode::Usage,
             crate::state::goal_workspace::GoalWorkspaceMode::ActiveAgent,
             crate::state::goal_workspace::GoalWorkspaceMode::Threads,
             crate::state::goal_workspace::GoalWorkspaceMode::NeedsAttention,
@@ -2929,6 +2930,7 @@ impl TuiModel {
                 | "attach"
                 | "plugins install"
                 | "skills install"
+                | "guidelines install"
                 | "help"
                 | "explain"
                 | "diverge"
@@ -3051,6 +3053,12 @@ impl TuiModel {
                 self.input.set_text("tamux skill import ");
                 self.focus = FocusArea::Input;
                 self.status_line = "Edit the skill source and run it in the terminal".to_string();
+            }
+            "guidelines install" => {
+                self.input.set_text("tamux guideline install ");
+                self.focus = FocusArea::Input;
+                self.status_line =
+                    "Edit the guideline source and run it in the terminal".to_string();
             }
             "help" => {
                 self.help_modal_scroll = 0;

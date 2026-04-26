@@ -417,6 +417,26 @@ pub(crate) enum SkillAction {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum GuidelineAction {
+    /// Rank installed guidelines for a task and suggest the next action.
+    Discover {
+        /// Task or problem description to match against installed guidelines.
+        query: String,
+        /// Optional terminal session UUID for workspace-aware ranking.
+        #[arg(long)]
+        session: Option<String>,
+        /// Maximum number of ranked candidates to show.
+        #[arg(long, default_value = "3")]
+        limit: usize,
+        /// Continue from an earlier discovery page cursor.
+        #[arg(long)]
+        cursor: Option<String>,
+    },
+    /// Show the contents of a specific guideline.
+    #[command(alias = "read")]
+    Inspect {
+        /// Guideline name, file stem, or relative path.
+        name: String,
+    },
     /// Install a markdown guideline into the tamux guidelines directory.
     Install {
         /// Source markdown guideline file.
@@ -668,6 +688,53 @@ mod tests {
             Some(Commands::Guideline {
                 action: GuidelineAction::List { json },
             }) => assert!(json),
+            other => panic!("parsed unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guideline_discover_subcommand_parses_like_skill_discover() {
+        let cli = Cli::try_parse_from([
+            "tamux",
+            "guidelines",
+            "discover",
+            "--session",
+            "550e8400-e29b-41d4-a716-446655440000",
+            "--limit",
+            "5",
+            "research papers",
+        ])
+        .expect("guidelines discover alias should parse");
+        match cli.command {
+            Some(Commands::Guideline {
+                action:
+                    GuidelineAction::Discover {
+                        query,
+                        session,
+                        limit,
+                        cursor,
+                    },
+            }) => {
+                assert_eq!(query, "research papers");
+                assert_eq!(
+                    session.as_deref(),
+                    Some("550e8400-e29b-41d4-a716-446655440000")
+                );
+                assert_eq!(limit, 5);
+                assert_eq!(cursor, None);
+            }
+            other => panic!("parsed unexpected command: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn guideline_inspect_subcommand_parses_read_alias() {
+        let cli = Cli::try_parse_from(["tamux", "guideline", "read", "research-task"])
+            .expect("guideline read alias should parse");
+        match cli.command {
+            Some(Commands::Guideline {
+                action: GuidelineAction::Inspect { name },
+            }) => assert_eq!(name, "research-task"),
             other => panic!("parsed unexpected command: {other:?}"),
         }
     }

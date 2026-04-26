@@ -351,6 +351,10 @@
             .iter()
             .find(|tool| tool.function.name == "list_triggers")
             .expect("list_triggers tool should be available");
+        assert!(list_triggers
+            .function
+            .description
+            .contains("packaged defaults"));
         let list_triggers_properties = list_triggers
             .function
             .parameters
@@ -363,6 +367,10 @@
             .iter()
             .find(|tool| tool.function.name == "add_trigger")
             .expect("add_trigger tool should be available");
+        assert!(add_trigger
+            .function
+            .description
+            .contains("Pack 1 defaults"));
         let properties = add_trigger
             .function
             .parameters
@@ -379,6 +387,39 @@
             assert!(
                 properties.contains_key(required_property),
                 "add_trigger should expose {required_property}"
+            );
+        }
+        assert!(properties
+            .get("event_family")
+            .and_then(|value| value.get("description"))
+            .and_then(|value| value.as_str())
+            .is_some_and(|description| description.contains("filesystem") && description.contains("system")));
+        assert!(properties
+            .get("event_kind")
+            .and_then(|value| value.get("description"))
+            .and_then(|value| value.as_str())
+            .is_some_and(|description| description.contains("file_changed") && description.contains("disk_pressure")));
+
+        let ingest_webhook = tools
+            .iter()
+            .find(|tool| tool.function.name == "ingest_webhook_event")
+            .expect("ingest_webhook_event tool should be available");
+        let ingest_properties = ingest_webhook
+            .function
+            .parameters
+            .get("properties")
+            .and_then(|value| value.as_object())
+            .expect("ingest_webhook_event schema should expose properties object");
+        for required_property in ["event_family", "event_kind"] {
+            assert!(
+                ingest_properties.contains_key(required_property),
+                "ingest_webhook_event should expose {required_property}"
+            );
+        }
+        for optional_property in ["state", "thread_id", "payload"] {
+            assert!(
+                ingest_properties.contains_key(optional_property),
+                "ingest_webhook_event should expose {optional_property}"
             );
         }
 

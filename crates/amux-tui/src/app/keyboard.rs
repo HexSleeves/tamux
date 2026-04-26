@@ -227,13 +227,14 @@ impl TuiModel {
                 KeyCode::Char('3') => {
                     Some(crate::state::goal_workspace::GoalWorkspaceMode::Progress)
                 }
-                KeyCode::Char('4') => {
+                KeyCode::Char('4') => Some(crate::state::goal_workspace::GoalWorkspaceMode::Usage),
+                KeyCode::Char('5') => {
                     Some(crate::state::goal_workspace::GoalWorkspaceMode::ActiveAgent)
                 }
-                KeyCode::Char('5') => {
+                KeyCode::Char('6') => {
                     Some(crate::state::goal_workspace::GoalWorkspaceMode::Threads)
                 }
-                KeyCode::Char('6') => {
+                KeyCode::Char('7') => {
                     Some(crate::state::goal_workspace::GoalWorkspaceMode::NeedsAttention)
                 }
                 _ => None,
