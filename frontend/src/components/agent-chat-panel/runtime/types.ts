@@ -41,11 +41,13 @@ export type AgentChatPanelRuntimeValue = {
   createThread: AgentStoreState["createThread"];
   deleteThread: AgentStoreState["deleteThread"];
   setActiveThread: AgentStoreState["setActiveThread"];
+  openThread: (threadId: string) => void;
   agentSettings: AgentStoreState["agentSettings"];
   updateAgentSetting: AgentStoreState["updateAgentSetting"];
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   refreshThreadList: () => Promise<void>;
+  loadOlderThreadMessages: () => Promise<boolean>;
   messages: AgentMessage[];
   todos: AgentTodoItem[];
   daemonTodosByThread: Record<string, AgentTodoItem[]>;

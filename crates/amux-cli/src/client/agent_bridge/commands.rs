@@ -89,12 +89,16 @@ where
                 })
                 .await?;
         }
-        AgentBridgeCommand::GetThread { thread_id } => {
+        AgentBridgeCommand::GetThread {
+            thread_id,
+            message_limit,
+            message_offset,
+        } => {
             framed
                 .send(ClientMessage::AgentGetThread {
                     thread_id,
-                    message_limit: None,
-                    message_offset: None,
+                    message_limit,
+                    message_offset,
                 })
                 .await?;
         }
@@ -981,6 +985,27 @@ mod tests {
                 assert_eq!(client_surface, Some(amux_protocol::ClientSurface::Electron));
             }
             other => panic!("expected AgentThreadParticipantCommand, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn get_thread_command_preserves_message_window() {
+        let message = emitted_client_message(
+            r#"{"type":"get-thread","thread_id":"thread-1","message_limit":50,"message_offset":100}"#,
+        )
+        .await;
+
+        match message {
+            ClientMessage::AgentGetThread {
+                thread_id,
+                message_limit,
+                message_offset,
+            } => {
+                assert_eq!(thread_id, "thread-1");
+                assert_eq!(message_limit, Some(50));
+                assert_eq!(message_offset, Some(100));
+            }
+            other => panic!("expected AgentGetThread, got {other:?}"),
         }
     }
 

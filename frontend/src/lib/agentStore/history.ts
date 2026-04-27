@@ -96,6 +96,9 @@ export type RemoteAgentThreadRecord = {
   updated_at?: number | null;
   total_input_tokens?: number | null;
   total_output_tokens?: number | null;
+  total_message_count?: number | null;
+  loaded_message_start?: number | null;
+  loaded_message_end?: number | null;
   thread_participants?: Array<{
     agent_id?: string;
     agent_name?: string;
@@ -295,6 +298,9 @@ export function buildHydratedRemoteThread(
     : [];
   const totalInputTokens = Number(thread.total_input_tokens ?? 0);
   const totalOutputTokens = Number(thread.total_output_tokens ?? 0);
+  const totalMessageCount = Number(thread.total_message_count ?? messages.length);
+  const loadedMessageStart = typeof thread.loaded_message_start === "number" ? thread.loaded_message_start : null;
+  const loadedMessageEnd = typeof thread.loaded_message_end === "number" ? thread.loaded_message_end : null;
   const resolvedAgentName = typeof thread.agent_name === "string" && thread.agent_name.trim()
     ? thread.agent_name
     : agent_name;
@@ -312,7 +318,9 @@ export function buildHydratedRemoteThread(
         : "Conversation",
       createdAt: Number(thread.created_at ?? Date.now()),
       updatedAt: Number(thread.updated_at ?? Date.now()),
-      messageCount: messages.length,
+      messageCount: totalMessageCount,
+      loadedMessageStart,
+      loadedMessageEnd,
       totalInputTokens,
       totalOutputTokens,
       totalTokens: totalInputTokens + totalOutputTokens,

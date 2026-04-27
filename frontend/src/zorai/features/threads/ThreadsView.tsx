@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from "react";
+import { useState, type KeyboardEvent, type UIEvent } from "react";
 import { SpawnedAgentsPanel } from "@/components/agent-chat-panel/SpawnedAgentsPanel";
 import { useAgentChatPanelRuntime } from "@/components/agent-chat-panel/runtime/context";
 import type { AgentMessage, AgentThread } from "@/lib/agentStore";
@@ -43,9 +43,7 @@ export function ThreadsRail() {
                 thread.id === runtime.activeThreadId ? "zorai-thread-item--active" : "",
               ].filter(Boolean).join(" ")}
               onClick={() => {
-                runtime.setActiveThread(thread.id);
-                runtime.setChatBackView("threads");
-                runtime.setView("chat");
+                runtime.openThread(thread.id);
               }}
             >
               <span className="zorai-thread-title">{thread.title}</span>
@@ -88,6 +86,17 @@ export function ThreadsView() {
   }
 
   const sendCurrentInput = () => runtime.handleSend();
+  const loadOlderThreadMessages = async (event: UIEvent<HTMLDivElement>) => {
+    const scroller = event.currentTarget;
+    if (scroller.scrollTop > 24) return;
+    const previousHeight = scroller.scrollHeight;
+    const loaded = await runtime.loadOlderThreadMessages();
+    if (loaded) {
+      requestAnimationFrame(() => {
+        scroller.scrollTop = scroller.scrollHeight - previousHeight;
+      });
+    }
+  };
   const startGoal = () => {
     const prompt = runtime.input.trim();
     if (!prompt) return;
@@ -106,7 +115,7 @@ export function ThreadsView() {
       />
       <ParticipantStrip thread={runtime.activeThread} />
 
-      <div className="zorai-thread-chat-scroll">
+      <div className="zorai-thread-chat-scroll" onScroll={(event) => void loadOlderThreadMessages(event)}>
         {runtime.messages.length === 0 ? (
           <div className="zorai-thread-empty-state">
             <div className="zorai-brand-mark"><span>Z</span></div>

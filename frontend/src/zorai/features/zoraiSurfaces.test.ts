@@ -108,4 +108,15 @@ describe("Zorai feature surfaces", () => {
     expect(source).toContain("Pinned Compaction Context");
     expect(source).toContain("Pin Limit Reached");
   });
+
+  it("fetches latest thread pages on selection and older pages on scroll-up", () => {
+    const source = readFeature("./threads/ThreadsView.tsx");
+    const runtimeSource = readFeature("../../components/agent-chat-panel/runtime/useAgentChatPanelProviderValue.ts");
+
+    expect(source).toContain("openThread");
+    expect(source).toContain("onScroll");
+    expect(source).toContain("loadOlderThreadMessages");
+    expect(runtimeSource).toContain("loadThreadPage");
+    expect(runtimeSource).toContain("messageOffset");
+  });
 });

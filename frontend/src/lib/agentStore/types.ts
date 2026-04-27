@@ -35,6 +35,8 @@ export interface AgentThread {
   createdAt: number;
   updatedAt: number;
   messageCount: number;
+  loadedMessageStart?: number | null;
+  loadedMessageEnd?: number | null;
   totalInputTokens: number;
   totalOutputTokens: number;
   totalTokens: number;

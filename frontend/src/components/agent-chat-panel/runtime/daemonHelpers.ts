@@ -22,6 +22,9 @@ type RemoteAgentThread = {
   id: string;
   title: string;
   messages: RemoteAgentMessageRecord[];
+  total_message_count?: number | null;
+  loaded_message_start?: number | null;
+  loaded_message_end?: number | null;
 };
 
 export function normalizeBridgePayload(payload: any) {
@@ -110,24 +113,48 @@ export async function reloadDaemonThreadIntoLocalState({
   setThreadTodos: (threadId: string, todos: AgentTodoItem[]) => void;
   setDaemonTodosByThread: Dispatch<SetStateAction<Record<string, AgentTodoItem[]>>>;
 }) {
+  await loadDaemonThreadPageIntoLocalState({
+    daemonThreadId,
+    mergeMode: "replace",
+    setThreadTodos,
+    setDaemonTodosByThread,
+  });
+}
+
+export async function loadDaemonThreadPageIntoLocalState({
+  daemonThreadId,
+  messageLimit,
+  messageOffset,
+  mergeMode,
+  setThreadTodos,
+  setDaemonTodosByThread,
+}: {
+  daemonThreadId: string;
+  messageLimit?: number | null;
+  messageOffset?: number | null;
+  mergeMode: "replace" | "prepend";
+  setThreadTodos: (threadId: string, todos: AgentTodoItem[]) => void;
+  setDaemonTodosByThread: Dispatch<SetStateAction<Record<string, AgentTodoItem[]>>>;
+}): Promise<boolean> {
   const amux = getAgentBridge();
-  if (!amux?.agentGetThread) return;
+  if (!amux?.agentGetThread) return false;
 
   const localThreadId = useAgentStore.getState().threads.find(
     (thread) => thread.daemonThreadId === daemonThreadId,
   )?.id;
-  if (!localThreadId) return;
+  if (!localThreadId) return false;
 
   const remoteThread = await amux.agentGetThread(daemonThreadId, {
-    messageLimit: resolveReactChatHistoryMessageLimit(
+    messageLimit: messageLimit ?? resolveReactChatHistoryMessageLimit(
       useAgentStore.getState().agentSettings.react_chat_history_page_size,
     ) ?? null,
+    messageOffset: messageOffset ?? null,
   }).catch(() => null) as any;
   const hydrated = buildHydratedRemoteThread(
     (remoteThread ?? {}) as any,
     remoteThread?.agent_name ?? "assistant",
   );
-  if (!hydrated) return;
+  if (!hydrated) return false;
 
   const reloadedThread = {
     ...hydrated.thread,
@@ -140,16 +167,39 @@ export async function reloadDaemonThreadIntoLocalState({
   })) as AgentMessage[];
 
   useAgentStore.setState((state) => ({
-    threads: state.threads.map((thread) => thread.id === localThreadId ? reloadedThread : thread),
+    threads: state.threads.map((thread) => thread.id === localThreadId ? {
+      ...thread,
+      ...reloadedThread,
+      loadedMessageStart: mergeMode === "prepend"
+        ? Math.min(thread.loadedMessageStart ?? reloadedThread.loadedMessageStart ?? 0, reloadedThread.loadedMessageStart ?? 0)
+        : reloadedThread.loadedMessageStart,
+      loadedMessageEnd: mergeMode === "prepend"
+        ? Math.max(thread.loadedMessageEnd ?? 0, reloadedThread.loadedMessageEnd ?? 0)
+        : reloadedThread.loadedMessageEnd,
+    } : thread),
     messages: {
       ...state.messages,
-      [localThreadId]: reloadedMessages,
+      [localThreadId]: mergeMode === "prepend"
+        ? mergeMessages(reloadedMessages, state.messages[localThreadId] ?? [])
+        : reloadedMessages,
     },
   }));
 
   const todos = await fetchThreadTodos(daemonThreadId).catch(() => []);
   setThreadTodos(localThreadId, todos);
   setDaemonTodosByThread((current) => ({ ...current, [daemonThreadId]: todos }));
+  return true;
+}
+
+function mergeMessages(prefix: AgentMessage[], existing: AgentMessage[]): AgentMessage[] {
+  const seen = new Set<string>();
+  const merged: AgentMessage[] = [];
+  for (const message of [...prefix, ...existing]) {
+    if (seen.has(message.id)) continue;
+    seen.add(message.id);
+    merged.push(message);
+  }
+  return merged;
 }
 
 export async function hydrateDaemonThreadIntoLocalState({

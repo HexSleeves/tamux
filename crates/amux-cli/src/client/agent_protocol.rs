@@ -60,6 +60,10 @@ pub(super) enum AgentBridgeCommand {
     ListThreads,
     GetThread {
         thread_id: String,
+        #[serde(default)]
+        message_limit: Option<usize>,
+        #[serde(default)]
+        message_offset: Option<usize>,
     },
     DeleteThread {
         thread_id: String,

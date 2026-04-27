@@ -21,6 +21,7 @@ import { useDaemonAgentActions } from "./useDaemonAgentActions";
 import { useDaemonAgentEvents } from "./useDaemonAgentEvents";
 import {
   hydrateDaemonThreadIntoLocalState,
+  loadDaemonThreadPageIntoLocalState,
   reloadDaemonThreadIntoLocalState,
 } from "./daemonHelpers";
 import { useLegacyAgentMessaging } from "./useLegacyAgentMessaging";
@@ -684,6 +685,56 @@ export function useAgentChatPanelProviderValue(): {
     });
   }, []);
 
+  const loadThreadPage = useCallback(async (
+    threadId: string,
+    direction: "latest" | "older",
+  ): Promise<boolean> => {
+    const thread = useAgentStore.getState().threads.find((entry) => entry.id === threadId);
+    const daemonThreadId = thread?.daemonThreadId;
+    if (!daemonThreadId || !getAgentBridge()?.agentGetThread) {
+      return false;
+    }
+    const messageLimit = resolveReactChatHistoryMessageLimit(agentSettings.react_chat_history_page_size) ?? null;
+    if (direction === "latest") {
+      return loadDaemonThreadPageIntoLocalState({
+        daemonThreadId,
+        messageLimit,
+        messageOffset: 0,
+        mergeMode: "replace",
+        setThreadTodos,
+        setDaemonTodosByThread,
+      });
+    }
+
+    const currentThread = useAgentStore.getState().threads.find((entry) => entry.id === threadId);
+    const loadedStart = currentThread?.loadedMessageStart ?? 0;
+    const totalMessages = currentThread?.messageCount ?? messages.length;
+    if (loadedStart <= 0 || totalMessages <= 0) {
+      return false;
+    }
+
+    return loadDaemonThreadPageIntoLocalState({
+      daemonThreadId,
+      messageLimit,
+      messageOffset: Math.max(0, totalMessages - loadedStart),
+      mergeMode: "prepend",
+      setThreadTodos,
+      setDaemonTodosByThread,
+    });
+  }, [agentSettings.react_chat_history_page_size, messages.length, setThreadTodos]);
+
+  const openThread = useCallback((threadId: string) => {
+    setActiveThread(threadId);
+    setChatBackView("threads");
+    setView("chat");
+    void loadThreadPage(threadId, "latest");
+  }, [loadThreadPage, setActiveThread]);
+
+  const loadOlderThreadMessages = useCallback(async () => {
+    if (!activeThreadId) return false;
+    return loadThreadPage(activeThreadId, "older");
+  }, [activeThreadId, loadThreadPage]);
+
   const sendMessage = useCallback((payload: { text: string; contentBlocksJson?: string | null; localContentBlocks?: import("@/lib/agentStore/types").AgentContentBlock[] }) => {
     if (!payload.text) return;
     if (shouldUseDaemonRuntime(agentSettings.agent_backend) && sendDaemonMessage(payload)) {
@@ -825,11 +876,13 @@ export function useAgentChatPanelProviderValue(): {
     createThread,
     deleteThread,
     setActiveThread,
+    openThread,
     agentSettings,
     updateAgentSetting,
     searchQuery,
     setSearchQuery,
     refreshThreadList,
+    loadOlderThreadMessages,
     messages,
     todos,
     daemonTodosByThread,
@@ -933,6 +986,8 @@ export function useAgentChatPanelProviderValue(): {
     searchQuery,
     canOpenSpawnedThread,
     openSpawnedThread,
+    loadOlderThreadMessages,
+    openThread,
     refreshThreadList,
     setActiveThread,
     setSearchQuery,
