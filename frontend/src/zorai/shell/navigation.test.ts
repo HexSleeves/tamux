@@ -24,4 +24,11 @@ describe("Zorai navigation", () => {
       expect(item.description.trim().length).toBeGreaterThan(0);
     }
   });
+
+  it("uses icon identifiers instead of text abbreviations in the global rail", () => {
+    for (const item of zoraiNavItems) {
+      expect(Object.hasOwn(item, "icon")).toBe(true);
+      expect(Object.hasOwn(item, "shortLabel")).toBe(false);
+    }
+  });
 });

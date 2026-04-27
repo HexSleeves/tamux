@@ -8,6 +8,7 @@ import { getDefaultZoraiTool, type ZoraiToolId } from "../features/tools/tools";
 import { WorkspacesRail, WorkspacesView } from "../features/workspaces/WorkspacesView";
 import { getDefaultZoraiView, zoraiNavItems, type ZoraiViewId } from "./navigation";
 import { ZoraiContextPanel } from "./ZoraiContextPanel";
+import { ZoraiBrandMark, ZoraiNavIcon } from "./ZoraiIcons";
 
 export function ZoraiShell() {
   const [activeView, setActiveView] = useState<ZoraiViewId>(getDefaultZoraiView);
@@ -21,7 +22,9 @@ export function ZoraiShell() {
   return (
     <div className="zorai-shell">
       <nav className="zorai-global-rail" aria-label="Zorai navigation">
-        <div className="zorai-brand" title="Zorai">Z</div>
+        <div className="zorai-brand" title="Zorai">
+          <ZoraiBrandMark />
+        </div>
         <div className="zorai-global-items">
           {zoraiNavItems.map((item) => (
             <button
@@ -33,8 +36,9 @@ export function ZoraiShell() {
               ].filter(Boolean).join(" ")}
               onClick={() => setActiveView(item.id)}
               title={item.label}
+              aria-label={item.label}
             >
-              {item.shortLabel}
+              <ZoraiNavIcon icon={item.icon} />
             </button>
           ))}
         </div>
