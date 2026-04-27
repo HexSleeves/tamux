@@ -22,9 +22,18 @@ describe("Zorai feature surfaces", () => {
 
   it("keeps Settings native to the Zorai shell instead of embedding the old settings panel", () => {
     const source = readFeature("./settings/SettingsView.tsx");
+    const panelSource = readFeature("./settings/SettingsPanels.tsx");
 
-    expect(source).not.toContain("SettingsPanel");
-    expect(source).toContain("zorai-settings-grid");
+    expect(source).not.toContain("components/SettingsPanel");
+    expect(panelSource).toContain("zorai-settings-grid");
+  });
+
+  it("keeps Settings scrollable inside the Zorai shell", () => {
+    const shellCss = readFeature("../styles/zorai.css");
+    const surfaceCss = readFeature("../styles/zorai-surfaces.css");
+
+    expect(shellCss).toMatch(/\.zorai-main\s*{[^}]*min-height:\s*0/s);
+    expect(shellCss).toMatch(/\.zorai-main\s*{[^}]*overflow:\s*hidden/s);
+    expect(surfaceCss).toMatch(/\.zorai-settings-surface\s*{[^}]*overflow:\s*auto/s);
   });
 });
-

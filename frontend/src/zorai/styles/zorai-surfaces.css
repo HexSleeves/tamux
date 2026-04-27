@@ -21,6 +21,18 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.zorai-settings-surface {
+  overflow: auto;
+  padding: 22px;
+}
+
+.zorai-settings-tab-strip {
+  display: none;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
 .zorai-panel {
   border: 1px solid var(--zorai-border);
   background: var(--zorai-bg-panel);
@@ -206,5 +218,8 @@
   .zorai-setting-row > :last-child {
     max-width: none;
   }
-}
 
+  .zorai-settings-tab-strip {
+    display: flex;
+  }
+}
