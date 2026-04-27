@@ -4,12 +4,14 @@ import { GoalsRail, GoalsView } from "../features/goals/GoalsView";
 import { SettingsRail, SettingsView } from "../features/settings/SettingsView";
 import { ThreadsContext, ThreadsRail, ThreadsView } from "../features/threads/ThreadsView";
 import { ToolsRail, ToolsView } from "../features/tools/ToolsView";
+import { getDefaultZoraiTool, type ZoraiToolId } from "../features/tools/tools";
 import { WorkspacesRail, WorkspacesView } from "../features/workspaces/WorkspacesView";
 import { getDefaultZoraiView, zoraiNavItems, type ZoraiViewId } from "./navigation";
 import { ZoraiContextPanel } from "./ZoraiContextPanel";
 
 export function ZoraiShell() {
   const [activeView, setActiveView] = useState<ZoraiViewId>(getDefaultZoraiView);
+  const [activeTool, setActiveTool] = useState<ZoraiToolId>(getDefaultZoraiTool);
   const [contextOpen, setContextOpen] = useState(false);
   const activeItem = useMemo(
     () => zoraiNavItems.find((item) => item.id === activeView) ?? zoraiNavItems[0],
@@ -44,7 +46,7 @@ export function ZoraiShell() {
           <h2>{activeItem.railLabel}</h2>
           <p>{activeItem.description}</p>
         </div>
-        {renderRail(activeView)}
+        {renderRail(activeView, activeTool, setActiveTool)}
       </aside>
 
       <main className="zorai-main">
@@ -61,7 +63,7 @@ export function ZoraiShell() {
             {contextOpen ? "Hide Context" : "Show Context"}
           </button>
         </header>
-        <div className="zorai-main-body">{renderMain(activeView)}</div>
+        <div className="zorai-main-body">{renderMain(activeView, activeTool, setActiveTool)}</div>
       </main>
 
       <ZoraiContextPanel
@@ -70,26 +72,38 @@ export function ZoraiShell() {
         open={contextOpen}
         onToggle={() => setContextOpen((current) => !current)}
       >
-        {activeView === "threads" ? <ThreadsContext /> : renderRail(activeView)}
+        {activeView === "threads" ? (
+          <ThreadsContext />
+        ) : (
+          renderRail(activeView, activeTool, setActiveTool)
+        )}
       </ZoraiContextPanel>
     </div>
   );
 }
 
-function renderRail(view: ZoraiViewId) {
+function renderRail(
+  view: ZoraiViewId,
+  activeTool: ZoraiToolId,
+  setActiveTool: (toolId: ZoraiToolId) => void,
+) {
   if (view === "threads") return <ThreadsRail />;
   if (view === "goals") return <GoalsRail />;
   if (view === "workspaces") return <WorkspacesRail />;
-  if (view === "tools") return <ToolsRail />;
+  if (view === "tools") return <ToolsRail activeTool={activeTool} onSelectTool={setActiveTool} />;
   if (view === "activity") return <ActivityRail />;
   return <SettingsRail />;
 }
 
-function renderMain(view: ZoraiViewId) {
+function renderMain(
+  view: ZoraiViewId,
+  activeTool: ZoraiToolId,
+  setActiveTool: (toolId: ZoraiToolId) => void,
+) {
   if (view === "threads") return <ThreadsView />;
   if (view === "goals") return <GoalsView />;
   if (view === "workspaces") return <WorkspacesView />;
-  if (view === "tools") return <ToolsView />;
+  if (view === "tools") return <ToolsView activeTool={activeTool} onSelectTool={setActiveTool} />;
   if (view === "activity") return <ActivityView />;
   return <SettingsView />;
 }

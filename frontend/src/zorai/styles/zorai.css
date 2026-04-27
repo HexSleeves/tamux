@@ -169,6 +169,17 @@
   color: var(--zorai-text);
   padding: 10px;
   text-align: left;
+  display: grid;
+  gap: 5px;
+}
+
+.zorai-rail-card--button {
+  cursor: pointer;
+}
+
+.zorai-rail-card--active {
+  background: var(--zorai-bg-active);
+  border-color: var(--zorai-accent);
 }
 
 .zorai-thread-item {
@@ -351,6 +362,85 @@
   text-align: left;
 }
 
+.zorai-tool-card--active {
+  border-color: var(--zorai-accent);
+  background: var(--zorai-bg-active);
+}
+
+.zorai-tools-surface {
+  display: flex;
+  flex-direction: column;
+}
+
+.zorai-tool-layout {
+  display: grid;
+  grid-template-columns: minmax(178px, 228px) minmax(0, 1fr);
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+}
+
+.zorai-tool-picker {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+}
+
+.zorai-tool-frame {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--zorai-border);
+  border-radius: 7px;
+  background: #05070b;
+}
+
+.zorai-terminal-tool {
+  height: 100%;
+  min-height: 0;
+}
+
+.zorai-embedded-tool-panel {
+  height: 100%;
+}
+
+.zorai-embedded-tool-panel > .amux-shell-card {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100% !important;
+  max-height: none !important;
+}
+
+.zorai-embedded-tool-panel > .amux-shell-card > div:first-child > div:first-child {
+  flex-wrap: wrap;
+}
+
+.zorai-embedded-tool-panel > .amux-shell-card > div:first-child > div:first-child > div {
+  min-width: 0;
+}
+
+.zorai-embedded-tool-panel > .amux-shell-card > div:first-child > div:first-child > div:last-child {
+  flex-wrap: wrap;
+}
+
+.zorai-embedded-tool-panel > .amux-shell-card > div:first-child > div:nth-child(2) {
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)) !important;
+}
+
+.zorai-tool-empty {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  color: var(--zorai-muted);
+  text-align: center;
+}
+
+.zorai-tool-empty strong {
+  color: var(--zorai-text);
+}
+
 .zorai-settings-surface {
   padding: 0;
 }
@@ -364,5 +454,21 @@
   .zorai-context-panel,
   .zorai-context-tab {
     display: none;
+  }
+
+  .zorai-tool-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .zorai-tool-picker {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .zorai-tool-frame {
+    min-height: 420px;
+  }
+
+  .zorai-embedded-tool-panel > .amux-shell-card > div:first-child {
+    padding: 14px !important;
   }
 }
