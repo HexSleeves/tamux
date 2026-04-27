@@ -2,8 +2,10 @@ import { useMemo, useState } from "react";
 import { useAgentChatPanelRuntime } from "@/components/agent-chat-panel/runtime/context";
 import { useAuditStore } from "@/lib/auditStore";
 import { useNotificationStore } from "@/lib/notificationStore";
+import { UsagePanel } from "./ActivityUsagePanel";
+import { buildUsageStats, formatCount } from "./ActivityUsageStats";
 
-type ActivityTab = "timeline" | "reasoning" | "planner";
+type ActivityTab = "timeline" | "reasoning" | "planner" | "usage";
 
 export function ActivityRail() {
   const notifications = useNotificationStore((state) => state.notifications);
@@ -22,8 +24,6 @@ export function ActivityRail() {
 
 export function ActivityView() {
   const runtime = useAgentChatPanelRuntime();
-  const notifications = useNotificationStore((state) => state.notifications);
-  const auditEntries = useAuditStore((state) => state.entries);
   const [tab, setTab] = useState<ActivityTab>("timeline");
   const [query, setQuery] = useState("");
   const normalizedQuery = query.trim().toLowerCase();
@@ -49,6 +49,10 @@ export function ActivityView() {
     return Object.entries(runtime.daemonTodosByThread).filter(([, todos]) => todos.length > 0);
   }, [runtime.daemonTodosByThread]);
 
+  const usageStats = useMemo(() => {
+    return buildUsageStats(runtime.threads, runtime.allMessagesByThread, runtime.goalRunsForTrace);
+  }, [runtime.allMessagesByThread, runtime.goalRunsForTrace, runtime.threads]);
+
   return (
     <section className="zorai-feature-surface zorai-activity-surface">
       <div className="zorai-view-header">
@@ -63,7 +67,7 @@ export function ActivityView() {
         <Metric label="Pending approvals" value={runtime.pendingApprovals.length} />
         <Metric label="Operational events" value={runtime.scopedOperationalEvents.length} />
         <Metric label="Reasoning events" value={runtime.scopedCognitiveEvents.length} />
-        <Metric label="Notifications" value={notifications.length + auditEntries.length} />
+        <Metric label="Usage tokens" value={formatCount(usageStats.totals.totalTokens)} />
       </div>
 
       <div className="zorai-toolbar">
@@ -73,7 +77,7 @@ export function ActivityView() {
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search activity..."
         />
-        {(["timeline", "reasoning", "planner"] as const).map((nextTab) => (
+        {(["timeline", "reasoning", "planner", "usage"] as const).map((nextTab) => (
           <button
             type="button"
             key={nextTab}
@@ -148,11 +152,13 @@ export function ActivityView() {
           </ActivityColumn>
         </div>
       ) : null}
+
+      {tab === "usage" ? <UsagePanel stats={usageStats} /> : null}
     </section>
   );
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="zorai-metric-card">
       <strong>{value}</strong>

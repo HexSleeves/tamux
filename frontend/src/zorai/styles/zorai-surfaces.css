@@ -165,6 +165,90 @@
   max-width: 320px;
 }
 
+.zorai-usage-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.zorai-usage-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.zorai-usage-panel--wide {
+  grid-column: 1 / -1;
+}
+
+.zorai-usage-table-wrap {
+  overflow: auto;
+}
+
+.zorai-usage-table {
+  width: 100%;
+  min-width: 760px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.zorai-usage-table th,
+.zorai-usage-table td {
+  border-top: 1px solid var(--zorai-border);
+  padding: 9px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.zorai-usage-table th {
+  color: var(--zorai-muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.zorai-usage-table td {
+  color: var(--zorai-text);
+}
+
+.zorai-usage-bars {
+  display: grid;
+  gap: 10px;
+}
+
+.zorai-usage-bar {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr) 92px;
+  gap: 10px;
+  align-items: center;
+  color: var(--zorai-muted);
+  font-size: 12px;
+}
+
+.zorai-usage-bar span,
+.zorai-usage-bar strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zorai-usage-bar strong {
+  color: var(--zorai-text);
+  text-align: right;
+}
+
+.zorai-usage-bar div {
+  height: 8px;
+  border-radius: 999px;
+  background: #101722;
+  overflow: hidden;
+}
+
+.zorai-usage-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--zorai-accent);
+}
+
 .zorai-button--active {
   border-color: var(--zorai-accent);
   color: var(--zorai-accent);
@@ -207,7 +291,8 @@
 @media (max-width: 900px) {
   .zorai-goals-layout,
   .zorai-activity-grid,
-  .zorai-settings-grid {
+  .zorai-settings-grid,
+  .zorai-usage-grid {
     grid-template-columns: 1fr;
   }
 

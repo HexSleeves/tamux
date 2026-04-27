@@ -20,6 +20,27 @@ describe("Zorai feature surfaces", () => {
     expect(source).toContain("zorai-activity-surface");
   });
 
+  it("exposes TUI-style usage statistics inside native Activity", () => {
+    const source = readFeature("./activity/ActivityView.tsx");
+    const usageSource = readFeature("./activity/ActivityUsagePanel.tsx");
+    const surfaceCss = readFeature("../styles/zorai-surfaces.css");
+
+    expect(source).toContain('"usage"');
+    expect(source).toContain("UsagePanel");
+    expect(usageSource).toContain("Provider / Model");
+    expect(usageSource).toContain("Goal Usage");
+    expect(surfaceCss).toContain("zorai-usage-grid");
+  });
+
+  it("keeps approval requests in native Zorai modal styling", () => {
+    const source = readFeature("../../components/AgentApprovalOverlay.tsx");
+
+    expect(source).toContain("zorai-approval-overlay");
+    expect(source).toContain("zorai-approval-dialog");
+    expect(source).not.toContain("amux-panel-title");
+    expect(source).not.toContain("onMouseEnter");
+  });
+
   it("keeps Settings native to the Zorai shell instead of embedding the old settings panel", () => {
     const source = readFeature("./settings/SettingsView.tsx");
     const panelSource = readFeature("./settings/SettingsPanels.tsx");
