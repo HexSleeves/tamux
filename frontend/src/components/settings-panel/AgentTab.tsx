@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { getDaemonOwnedAuthCapability, getProviderAuthSupportOptions } from "@/lib/agentDaemonConfig";
 import { getBridge } from "@/lib/bridge";
 import { PRIMARY_AGENT_NAME } from "@/lib/agentNames";
+import { ZORAI_APP_NAME } from "@/zorai/branding";
 import { filterFetchedModelsForAudio, filterFetchedModelsForImageGeneration } from "@/lib/providerModels";
 import type { AgentProviderConfig, AgentProviderId, AgentSettings } from "../../lib/agentStore";
 import { DEFAULT_CUSTOM_MODEL_CONTEXT_WINDOW, getDefaultApiTransport, getDefaultAuthSource, getDefaultModelForProvider, getEffectiveContextWindow, getProviderApiType, getProviderDefinition, getProviderModels, getSupportedApiTransports, getSupportedAuthSources, modelUsesContextWindowOverride, normalizeAuthSource, providerUsesConfigurableBaseUrl, resolveProviderModelDefinition } from "../../lib/agentStore";
@@ -284,7 +285,7 @@ export function AgentTab({
                     <select value={settings.agent_backend}
                         onChange={(e) => updateSetting("agent_backend", e.target.value as "daemon" | "openclaw" | "hermes" | "legacy")}
                         style={inputStyle}>
-                        <option value="daemon">tamux</option>
+                        <option value="daemon">{ZORAI_APP_NAME}</option>
                         <option value="openclaw">OpenClaw</option>
                         <option value="hermes">Hermes</option>
                         <option value="legacy">Legacy Fallback</option>
@@ -304,7 +305,7 @@ export function AgentTab({
                             <span> Config: <code>~/.openclaw/openclaw.json</code></span>
                         )}
                         <div style={{ marginTop: 6, padding: "4px 6px", background: "var(--bg-secondary)", borderRadius: 3 }}>
-                            <strong>tamux tools:</strong> Add <code>tamux-mcp</code> to {settings.agent_backend === "hermes" ? "Hermes" : "OpenClaw"}'s MCP config for terminal session access, command execution, history search, and more.
+                            <strong>{ZORAI_APP_NAME} tools:</strong> Add <code>tamux-mcp</code> to {settings.agent_backend === "hermes" ? "Hermes" : "OpenClaw"}'s MCP config for terminal session access, command execution, history search, and more.
                             <div style={{ marginTop: 3, fontFamily: "monospace", fontSize: 10 }}>
                                 {`{"mcpServers": {"tamux": {"command": "tamux-mcp"}}}`}
                             </div>
@@ -1140,7 +1141,7 @@ export function AgentTab({
                 </SettingRow>
                 {daemonDelayControlsDisabled ? (
                     <div style={{ marginTop: 4, marginBottom: 8, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.4 }}>
-                        These delay controls only affect the tamux daemon runtime. {settings.agent_backend === "openclaw" ? "OpenClaw" : "Hermes"} uses its own pacing rules.
+                        These delay controls only affect the {ZORAI_APP_NAME} daemon runtime. {settings.agent_backend === "openclaw" ? "OpenClaw" : "Hermes"} uses its own pacing rules.
                     </div>
                 ) : null}
                 <SettingRow label="Auto Retry">

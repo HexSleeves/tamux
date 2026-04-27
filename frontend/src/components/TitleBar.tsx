@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getBridge } from "@/lib/bridge";
+import { ZORAI_APP_NAME } from "@/zorai/branding";
 import { useAgentMissionStore } from "../lib/agentMissionStore";
 import { useAgentStore } from "../lib/agentStore";
 import { useKeybindStore } from "../lib/keybindStore";
@@ -209,7 +210,7 @@ export function TitleBar() {
               fontWeight: 700,
             }}
           >
-            Tamux
+            {ZORAI_APP_NAME}
           </span>
           <span style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)" }}>agentic runtime</span>
         </div>

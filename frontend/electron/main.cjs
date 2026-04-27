@@ -304,7 +304,7 @@ function checkSetupPrereqs(_event, profile = 'desktop') {
         installRoot: path.dirname(daemonPath),
         dataDir: ensureTamuxDataDir(),
         gettingStartedPath: resolveGettingStartedPath(),
-        whatIsTamux: 'tamux is an AI-native terminal multiplexer with a Rust daemon, pane/session control, and agent workflows.',
+        whatIsTamux: 'Zorai is an agent-first orchestration shell with threads, goals, workspaces, and operator tools backed by the existing daemon runtime.',
     };
 }
 

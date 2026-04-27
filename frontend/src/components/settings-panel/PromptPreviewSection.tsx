@@ -1,6 +1,7 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { getBridge } from "@/lib/bridge";
 import { PRIMARY_AGENT_NAME } from "@/lib/agentNames";
+import { ZORAI_APP_NAME } from "@/zorai/branding";
 import type { AgentSettings } from "../../lib/agentStore";
 import { Section, smallBtnStyle } from "./shared";
 
@@ -65,7 +66,7 @@ export function PromptPreviewSection({
         }
         if (backend === "openclaw" || backend === "hermes") {
             setInspection(null);
-            setError("Prompt preview currently shows daemon-managed tamux agents only.");
+            setError(`Prompt preview currently shows daemon-managed ${ZORAI_APP_NAME} agents only.`);
             setLoading(false);
             return;
         }

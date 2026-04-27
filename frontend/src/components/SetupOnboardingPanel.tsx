@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 
 import { CONCIERGE_AGENT_NAME, PRIMARY_AGENT_NAME } from "../lib/agentNames";
+import { ZORAI_APP_DESCRIPTION, ZORAI_APP_NAME } from "../zorai/branding";
 
 const SETUP_PANEL_STATE_KEY = "tamux-setup-onboarding-state-v1";
 const SETUP_PANEL_VERSION = "1";
@@ -129,9 +130,9 @@ export function SetupOnboardingPanel() {
           <div style={{ fontSize: 12, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--text-secondary)" }}>
             First-run setup
           </div>
-          <h2 style={{ margin: 0, fontSize: 24 }}>tamux Setup Assistant</h2>
+          <h2 style={{ margin: 0, fontSize: 24 }}>{ZORAI_APP_NAME} Setup Assistant</h2>
           <div style={{ fontSize: 13, color: "var(--text-secondary)", lineHeight: 1.5 }}>
-            {report?.whatIsTamux ?? "tamux is an AI-native terminal multiplexer with a Rust daemon and agent workflows."}
+            {report?.whatIsTamux ?? ZORAI_APP_DESCRIPTION}
           </div>
         </div>
 

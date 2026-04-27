@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getBridge } from "@/lib/bridge";
+import { ZORAI_APP_NAME } from "@/zorai/branding";
 import type { AgentSettings } from "../../lib/agentStore";
 import { PasswordInput, Section, SettingRow, TextAreaInput, TextInput, Toggle, smallBtnStyle } from "./shared";
 import { GatewayHealth } from "./GatewaySettings";
@@ -288,7 +289,7 @@ export function GatewayTab({
                         placeholder="!tamux" />
                 </SettingRow>
                 <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 4, marginBottom: 12, lineHeight: 1.5 }}>
-                    The gateway bridges chat platforms to tamux. The <code style={{ color: "var(--accent)" }}>tamux-gateway</code> binary
+                    The gateway bridges chat platforms to {ZORAI_APP_NAME}. The <code style={{ color: "var(--accent)" }}>tamux-gateway</code> binary
                     reads tokens from environment variables (<code>TAMUX_SLACK_TOKEN</code>, <code>TAMUX_TELEGRAM_TOKEN</code>, etc.)
                     or from the values configured below.
                 </div>
