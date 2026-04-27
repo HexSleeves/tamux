@@ -27,6 +27,24 @@ import {
   handleWorkspaceCommand,
 } from "./daemonEventHandlers";
 
+export function resolveDaemonEventLocalThreadId(
+  event: any,
+  fallbackLocalThreadId: string | null,
+  fallbackDaemonThreadId: string | null,
+): string | null {
+  const daemonThreadId = typeof event?.thread_id === "string" ? event.thread_id : null;
+  if (!daemonThreadId) {
+    return fallbackLocalThreadId;
+  }
+
+  const matchingThread = useAgentStore.getState().threads.find((thread) => thread.daemonThreadId === daemonThreadId);
+  if (matchingThread) {
+    return matchingThread.id;
+  }
+
+  return daemonThreadId === fallbackDaemonThreadId ? fallbackLocalThreadId : null;
+}
+
 export function useDaemonAgentEvents({
   agentBackend,
   activePaneId,
@@ -156,7 +174,7 @@ export function useDaemonAgentEvents({
     const unsubscribe = amux.onAgentEvent((event: any) => {
       if (!event?.type) return;
 
-      const tid = daemonLocalThreadRef.current;
+      const tid = resolveDaemonEventLocalThreadId(event, daemonLocalThreadRef.current, daemonThreadIdRef.current);
 
       switch (event.type) {
         case "delta": {

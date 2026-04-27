@@ -337,6 +337,7 @@ export function useAgentChatPanelProviderValue(): {
   const daemonLocalThreadRef = useRef<string | null>(null);
   const pendingGatewayMessagesRef = useRef<Array<{ role: "user"; content: string; inputTokens: number; outputTokens: number; totalTokens: number; isCompactionSummary: boolean }>>([]);
   const goalRunWorkspacesRef = useRef<Record<string, string>>({});
+  const threadPageLoadChainRef = useRef<Promise<unknown>>(Promise.resolve());
 
   useDaemonAgentEvents({
     agentBackend: agentSettings.agent_backend,
@@ -685,45 +686,56 @@ export function useAgentChatPanelProviderValue(): {
     });
   }, []);
 
-  const loadThreadPage = useCallback(async (
+  const loadThreadPage = useCallback((
     threadId: string,
     direction: "latest" | "older",
   ): Promise<boolean> => {
-    const thread = useAgentStore.getState().threads.find((entry) => entry.id === threadId);
-    const daemonThreadId = thread?.daemonThreadId;
-    if (!daemonThreadId || !getAgentBridge()?.agentGetThread) {
-      return false;
-    }
-    const messageLimit = resolveReactChatHistoryMessageLimit(agentSettings.react_chat_history_page_size) ?? null;
-    if (direction === "latest") {
+    const runThreadPageLoad = async (): Promise<boolean> => {
+      const thread = useAgentStore.getState().threads.find((entry) => entry.id === threadId);
+      const daemonThreadId = thread?.daemonThreadId;
+      if (!daemonThreadId || !getAgentBridge()?.agentGetThread) {
+        return false;
+      }
+      const messageLimit = resolveReactChatHistoryMessageLimit(agentSettings.react_chat_history_page_size) ?? null;
+      if (direction === "latest") {
+        return loadDaemonThreadPageIntoLocalState({
+          daemonThreadId,
+          messageLimit,
+          messageOffset: 0,
+          mergeMode: "replace",
+          setThreadTodos,
+          setDaemonTodosByThread,
+        });
+      }
+
+      const currentThread = useAgentStore.getState().threads.find((entry) => entry.id === threadId);
+      const loadedStart = currentThread?.loadedMessageStart ?? 0;
+      const totalMessages = currentThread?.messageCount ?? messages.length;
+      if (loadedStart <= 0 || totalMessages <= 0) {
+        return false;
+      }
+
       return loadDaemonThreadPageIntoLocalState({
         daemonThreadId,
         messageLimit,
-        messageOffset: 0,
-        mergeMode: "replace",
+        messageOffset: Math.max(0, totalMessages - loadedStart),
+        mergeMode: "prepend",
         setThreadTodos,
         setDaemonTodosByThread,
       });
-    }
+    };
 
-    const currentThread = useAgentStore.getState().threads.find((entry) => entry.id === threadId);
-    const loadedStart = currentThread?.loadedMessageStart ?? 0;
-    const totalMessages = currentThread?.messageCount ?? messages.length;
-    if (loadedStart <= 0 || totalMessages <= 0) {
-      return false;
-    }
-
-    return loadDaemonThreadPageIntoLocalState({
-      daemonThreadId,
-      messageLimit,
-      messageOffset: Math.max(0, totalMessages - loadedStart),
-      mergeMode: "prepend",
-      setThreadTodos,
-      setDaemonTodosByThread,
-    });
+    const nextLoad = threadPageLoadChainRef.current
+      .catch(() => undefined)
+      .then(runThreadPageLoad);
+    threadPageLoadChainRef.current = nextLoad.catch(() => undefined);
+    return nextLoad;
   }, [agentSettings.react_chat_history_page_size, messages.length, setThreadTodos]);
 
   const openThread = useCallback((threadId: string) => {
+    const thread = useAgentStore.getState().threads.find((entry) => entry.id === threadId);
+    daemonLocalThreadRef.current = threadId;
+    daemonThreadIdRef.current = thread?.daemonThreadId ?? null;
     setActiveThread(threadId);
     setChatBackView("threads");
     setView("chat");

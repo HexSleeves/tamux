@@ -112,11 +112,15 @@ describe("Zorai feature surfaces", () => {
   it("fetches latest thread pages on selection and older pages on scroll-up", () => {
     const source = readFeature("./threads/ThreadsView.tsx");
     const runtimeSource = readFeature("../../components/agent-chat-panel/runtime/useAgentChatPanelProviderValue.ts");
+    const eventsSource = readFeature("../../components/agent-chat-panel/runtime/useDaemonAgentEvents.ts");
 
     expect(source).toContain("openThread");
     expect(source).toContain("onScroll");
     expect(source).toContain("loadOlderThreadMessages");
     expect(runtimeSource).toContain("loadThreadPage");
     expect(runtimeSource).toContain("messageOffset");
+    expect(runtimeSource).toContain("threadPageLoadChainRef");
+    expect(eventsSource).toContain("resolveDaemonEventLocalThreadId");
+    expect(eventsSource).toContain("event.thread_id");
   });
 });
