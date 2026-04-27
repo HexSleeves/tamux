@@ -109,6 +109,15 @@ describe("Zorai feature surfaces", () => {
     expect(source).toContain("Pin Limit Reached");
   });
 
+  it("renders thread tool calls through collapsed tool rows instead of plain message bubbles", () => {
+    const source = readFeature("./threads/ThreadsView.tsx");
+
+    expect(source).toContain("buildDisplayItems");
+    expect(source).toContain("ToolEventRow");
+    expect(source).toContain('item.type === "tool"');
+    expect(source).not.toContain("summarizeToolMessage");
+  });
+
   it("fetches latest thread pages on selection and older pages on scroll-up", () => {
     const source = readFeature("./threads/ThreadsView.tsx");
     const runtimeSource = readFeature("../../components/agent-chat-panel/runtime/useAgentChatPanelProviderValue.ts");

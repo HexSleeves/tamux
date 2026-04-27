@@ -1,4 +1,6 @@
-import { useState, type KeyboardEvent, type UIEvent } from "react";
+import { useMemo, useState, type KeyboardEvent, type UIEvent } from "react";
+import { ToolEventRow } from "@/components/agent-chat-panel/chat-view/ToolEventRow";
+import { buildDisplayItems } from "@/components/agent-chat-panel/chat-view/helpers";
 import { SpawnedAgentsPanel } from "@/components/agent-chat-panel/SpawnedAgentsPanel";
 import { useAgentChatPanelRuntime } from "@/components/agent-chat-panel/runtime/context";
 import type { AgentMessage, AgentThread } from "@/lib/agentStore";
@@ -74,6 +76,7 @@ function threadHistoryLabel(thread: AgentThread): string {
 export function ThreadsView() {
   const runtime = useAgentChatPanelRuntime();
   const [pinLimitResult, setPinLimitResult] = useState<AmuxThreadMessagePinResult | null>(null);
+  const displayItems = useMemo(() => buildDisplayItems(runtime.messages), [runtime.messages]);
 
   if (!runtime.activeThread) {
     return (
@@ -132,8 +135,13 @@ export function ThreadsView() {
             <strong>Start a Zorai thread</strong>
             <span>Ask for a plan, delegate work, or turn a request into a goal.</span>
           </div>
-        ) : (
-          runtime.messages.map((message) => (
+        ) : displayItems.map((item) => {
+          if (item.type === "tool") {
+            return <ToolEventRow key={`tool_${item.group.key}`} group={item.group} />;
+          }
+
+          const message = item.message;
+          return (
             <MessageBubble
               key={message.id}
               message={message}
@@ -145,8 +153,8 @@ export function ThreadsView() {
               }}
               onUnpin={() => void runtime.unpinMessageForCompaction(runtime.activeThread?.id ?? message.threadId, message.id)}
             />
-          ))
-        )}
+          );
+        })}
         <div ref={runtime.messagesEndRef} />
       </div>
 
@@ -254,7 +262,7 @@ function MessageBubble({
         <span>{formatTime(message.createdAt)}{tokenText ? ` / ${tokenText}` : ""}</span>
       </div>
       {message.reasoning ? <p className="zorai-message__reasoning">{message.reasoning}</p> : null}
-      <div className="zorai-message__content">{message.content || summarizeToolMessage(message)}</div>
+      <div className="zorai-message__content">{message.content || "No text content"}</div>
       {message.toolCalls && message.toolCalls.length > 0 ? (
         <div className="zorai-message__tools">{message.toolCalls.length} tool calls</div>
       ) : null}
@@ -305,8 +313,8 @@ function PinLimitModal({
   );
 }
 
-function summarizeToolMessage(message: AgentMessage): string {
-  if (message.toolName) return `${message.toolName}: ${message.toolStatus ?? "done"}`;
+function summarizePinnedMessage(message: AgentMessage): string {
+  if (message.toolName) return `Tool: ${message.toolName} (${message.toolStatus ?? "done"})`;
   return "No text content";
 }
 
@@ -379,7 +387,7 @@ function PinnedThreadContext({
             <strong>{message.role}</strong>
             <span>{message.content.length.toLocaleString()} chars</span>
           </div>
-          <p>{message.content || summarizeToolMessage(message)}</p>
+          <p>{message.content || summarizePinnedMessage(message)}</p>
           <div className="zorai-card-actions">
             <button type="button" className="zorai-ghost-button" onClick={() => onJumpToMessage(message.id)}>
               Jump
