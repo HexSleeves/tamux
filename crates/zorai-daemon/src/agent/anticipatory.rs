@@ -525,7 +525,10 @@ impl AgentEngine {
             if item.confidence < SPECULATIVE_CONFIDENCE_THRESHOLD {
                 continue;
             }
-            if !matches!(item.kind.as_str(), "intent_prediction" | "system_outcome_foresight") {
+            if !matches!(
+                item.kind.as_str(),
+                "intent_prediction" | "system_outcome_foresight"
+            ) {
                 continue;
             }
 
@@ -540,9 +543,9 @@ impl AgentEngine {
                 .speculative_results_by_thread
                 .get(&thread_id)
                 .is_some_and(|results| {
-                    results
-                        .iter()
-                        .any(|result| result.action_kind == action_kind && result.used_at_ms.is_none())
+                    results.iter().any(|result| {
+                        result.action_kind == action_kind && result.used_at_ms.is_none()
+                    })
                 });
             if deduped {
                 continue;
@@ -623,15 +626,21 @@ impl AgentEngine {
                 precomputation_id: snapshot.precomputation_id,
             };
 
-            let mut runtime = self.anticipatory.write().await;
-            let results = runtime
-                .speculative_results_by_thread
-                .entry(thread_id)
-                .or_default();
-            results.retain(|existing| {
-                existing.action_kind != result.action_kind || existing.used_at_ms.is_some()
-            });
-            results.push(result);
+            let result_for_provenance = result.clone();
+            let thread_key = thread_id.clone();
+            {
+                let mut runtime = self.anticipatory.write().await;
+                let results = runtime
+                    .speculative_results_by_thread
+                    .entry(thread_key)
+                    .or_default();
+                results.retain(|existing| {
+                    existing.action_kind != result.action_kind || existing.used_at_ms.is_some()
+                });
+                results.push(result);
+            }
+            self.record_speculative_result_prepared(&opportunity, &result_for_provenance)
+                .await;
         }
     }
 
@@ -644,13 +653,11 @@ impl AgentEngine {
         let result = {
             let mut runtime = self.anticipatory.write().await;
             let results = runtime.speculative_results_by_thread.get_mut(thread_id)?;
-            let result = results
-                .iter_mut()
-                .find(|candidate| {
-                    candidate.action_kind == action_kind
-                        && candidate.expires_at_ms > now
-                        && candidate.used_at_ms.is_none()
-                })?;
+            let result = results.iter_mut().find(|candidate| {
+                candidate.action_kind == action_kind
+                    && candidate.expires_at_ms > now
+                    && candidate.used_at_ms.is_none()
+            })?;
             result.used_at_ms = Some(now);
             result.clone()
         };
@@ -664,6 +671,9 @@ impl AgentEngine {
                 tracing::warn!(thread_id = %thread_id, %error, "failed to mark speculative precomputation as used");
             }
         }
+
+        self.record_speculative_result_used(&result, "anticipatory_prompt_context")
+            .await;
 
         Some(result)
     }
@@ -1397,17 +1407,21 @@ impl AgentEngine {
             .map(|(_, precomputation_id)| Some(precomputation_id))
             .unwrap_or(None);
 
+        let snapshot = AnticipatoryPrewarmSnapshot {
+            summary,
+            precomputation_id,
+        };
         self.anticipatory
             .write()
             .await
             .prewarm_cache_by_thread
-            .insert(
-                thread_id.to_string(),
-                AnticipatoryPrewarmSnapshot {
-                    summary,
-                    precomputation_id,
-                },
-            );
+            .insert(thread_id.to_string(), snapshot.clone());
+        self.record_proactive_cache_prepared(
+            thread_id,
+            &snapshot.summary,
+            snapshot.precomputation_id,
+        )
+        .await;
     }
 
     async fn persist_predictive_hydration_causal_trace(&self, thread_id: &str) {

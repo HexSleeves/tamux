@@ -1,9 +1,9 @@
 use super::*;
-use zorai_shared::providers::PROVIDER_ID_OPENAI;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tempfile::TempDir;
 use tokio::sync::Notify;
 use tokio::time::{timeout, Duration};
+use zorai_shared::providers::PROVIDER_ID_OPENAI;
 
 async fn make_runner_test_engine(config: AgentConfig) -> (Arc<AgentEngine>, TempDir) {
     let temp_dir = TempDir::new().expect("temp dir");

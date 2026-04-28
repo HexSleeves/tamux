@@ -1,8 +1,8 @@
 use super::*;
-use zorai_shared::providers::PROVIDER_ID_OPENAI;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;
 use tokio::time::{timeout, Duration};
+use zorai_shared::providers::PROVIDER_ID_OPENAI;
 
 #[tokio::test]
 async fn persisted_assistant_messages_reload_provider_final_result_metadata() {

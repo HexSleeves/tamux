@@ -85,23 +85,29 @@ impl AgentEngine {
     }
 
     pub(super) async fn mark_prewarm_cache_used(&self, thread_id: &str) {
-        let precomputation_id = {
+        let snapshot = {
             let runtime = self.anticipatory.read().await;
-            runtime
-                .prewarm_cache_by_thread
-                .get(thread_id)
-                .and_then(|snapshot| snapshot.precomputation_id)
+            runtime.prewarm_cache_by_thread.get(thread_id).cloned()
         };
-        let Some(precomputation_id) = precomputation_id else {
+        let Some(snapshot) = snapshot else {
             return;
         };
-        if let Err(error) = self
-            .history
-            .update_precomputation_usage(precomputation_id, true, now_millis())
-            .await
-        {
-            tracing::warn!(thread_id = %thread_id, %error, "failed to mark anticipatory precomputation as used");
+        if let Some(precomputation_id) = snapshot.precomputation_id {
+            if let Err(error) = self
+                .history
+                .update_precomputation_usage(precomputation_id, true, now_millis())
+                .await
+            {
+                tracing::warn!(thread_id = %thread_id, %error, "failed to mark anticipatory precomputation as used");
+            }
         }
+        self.record_proactive_cache_used(
+            thread_id,
+            &snapshot.summary,
+            snapshot.precomputation_id,
+            "anticipatory_prompt_context",
+        )
+        .await;
     }
 
     pub(super) async fn build_anticipatory_prompt_context(

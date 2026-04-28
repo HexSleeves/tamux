@@ -328,7 +328,7 @@ providers:
         assert!(cfg.background_community_search);
         assert_eq!(cfg.community_preapprove_timeout_secs, 45);
         assert_eq!(cfg.suggest_global_enable_after_approvals, 3);
-        assert!(cfg.llm_normalize_on_no_match);
+        assert!(!cfg.llm_normalize_on_no_match);
         assert!(!cfg.llm_semantic_search_on_no_match);
         assert_eq!(cfg.llm_semantic_search_max_skills, 64);
     }
@@ -361,8 +361,8 @@ providers:
         assert!(cfg.background_community_search);
         assert_eq!(cfg.community_preapprove_timeout_secs, 30);
         assert_eq!(cfg.suggest_global_enable_after_approvals, 3);
-        assert!(cfg.llm_normalize_on_no_match);
-        assert!(cfg.llm_semantic_search_on_no_match);
+        assert!(!cfg.llm_normalize_on_no_match);
+        assert!(!cfg.llm_semantic_search_on_no_match);
         assert_eq!(cfg.llm_semantic_search_max_skills, 64);
     }
 
@@ -503,8 +503,8 @@ providers:
         assert!(cfg.skill_recommendation.background_community_search);
         assert_eq!(cfg.skill_recommendation.community_preapprove_timeout_secs, 30);
         assert_eq!(cfg.skill_recommendation.suggest_global_enable_after_approvals, 3);
-        assert!(cfg.skill_recommendation.llm_normalize_on_no_match);
-        assert!(cfg.skill_recommendation.llm_semantic_search_on_no_match);
+        assert!(!cfg.skill_recommendation.llm_normalize_on_no_match);
+        assert!(!cfg.skill_recommendation.llm_semantic_search_on_no_match);
         assert_eq!(cfg.skill_recommendation.llm_semantic_search_max_skills, 64);
     }
 

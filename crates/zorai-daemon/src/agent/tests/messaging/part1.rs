@@ -131,9 +131,10 @@ fn tool_execution_hot_path_boxes_large_futures() {
         .split("\n#[cfg(test)]")
         .next()
         .unwrap_or(subagents_source.as_str());
-    let thread_participants_source =
-        fs::read_to_string(repo_root().join("crates/zorai-daemon/src/agent/thread_participants.rs"))
-            .expect("read thread_participants.rs");
+    let thread_participants_source = fs::read_to_string(
+        repo_root().join("crates/zorai-daemon/src/agent/thread_participants.rs"),
+    )
+    .expect("read thread_participants.rs");
     let thread_participants_production = thread_participants_source
         .split("\n#[cfg(test)]")
         .next()

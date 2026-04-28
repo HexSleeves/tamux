@@ -1132,6 +1132,81 @@ impl AgentEngine {
                 })
             })
             .collect::<Vec<_>>();
+        let emergent_protocols = {
+            let mut pending_proposals = Vec::new();
+            let mut accepted_protocols = Vec::new();
+
+            for thread in self.threads.read().await.values() {
+                let thread_id = thread.id.as_str();
+                if let Ok(store) = self.get_thread_protocol_candidate_store(thread_id).await {
+                    pending_proposals.extend(
+                        store.candidates
+                            .into_iter()
+                            .filter(|candidate| {
+                                candidate.state
+                                    == crate::agent::emergent_protocol::types::ProtocolCandidateState::Proposed
+                            })
+                            .map(|candidate| {
+                                serde_json::json!({
+                                    "thread_id": candidate.thread_id,
+                                    "candidate_id": candidate.id,
+                                    "signal_kind": candidate.kind.as_str(),
+                                    "trigger_phrase": candidate.trigger_phrase,
+                                    "normalized_pattern": candidate.normalized_pattern,
+                                    "confidence": candidate.confidence,
+                                    "observation_count": candidate.observation_count,
+                                    "last_seen_at_ms": candidate.last_seen_at_ms,
+                                })
+                            }),
+                    );
+                }
+                if let Ok(entries) = self.list_thread_protocol_registry_entries(thread_id).await {
+                    accepted_protocols.extend(entries.into_iter().map(|entry| {
+                        serde_json::json!({
+                            "thread_id": entry.thread_id,
+                            "protocol_id": entry.protocol_id,
+                            "token": entry.token,
+                            "signal_kind": entry.signal_kind.as_str(),
+                            "normalized_pattern": entry.normalized_pattern,
+                            "usage_count": entry.usage_count,
+                            "success_rate": entry.success_rate,
+                            "last_used_ms": entry.last_used_ms,
+                            "source_candidate_id": entry.source_candidate_id,
+                        })
+                    }));
+                }
+            }
+
+            pending_proposals.sort_by(|left, right| {
+                right
+                    .get("last_seen_at_ms")
+                    .and_then(|value| value.as_u64())
+                    .cmp(&left.get("last_seen_at_ms").and_then(|value| value.as_u64()))
+            });
+            accepted_protocols.sort_by(|left, right| {
+                right
+                    .get("last_used_ms")
+                    .and_then(|value| value.as_u64())
+                    .cmp(&left.get("last_used_ms").and_then(|value| value.as_u64()))
+                    .then(
+                        right
+                            .get("usage_count")
+                            .and_then(|value| value.as_u64())
+                            .cmp(&left.get("usage_count").and_then(|value| value.as_u64())),
+                    )
+            });
+
+            if pending_proposals.is_empty() && accepted_protocols.is_empty() {
+                None
+            } else {
+                Some(serde_json::json!({
+                    "proposal_count": pending_proposals.len(),
+                    "proposals": pending_proposals,
+                    "protocol_count": accepted_protocols.len(),
+                    "protocols": accepted_protocols,
+                }))
+            }
+        };
         let routing_decision = self
             .history
             .list_recent_handoff_routing(1)
@@ -1286,6 +1361,7 @@ impl AgentEngine {
         let cognitive_resonance = CognitiveResonanceSnapshot::from_model(&operator_model);
         let meta_cognitive_self_model = self.meta_cognitive_self_model.read().await.clone();
         let anticipatory_runtime = self.anticipatory.read().await;
+        let diagnostics_now = now_millis();
         let anticipatory_items = anticipatory_runtime.items.clone();
         let intent_prediction = anticipatory_items
             .iter()
@@ -1359,6 +1435,93 @@ impl AgentEngine {
                     .partial_cmp(&right.get("confidence").and_then(|value| value.as_f64()))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
+        let speculative_queue = anticipatory_runtime
+            .opportunity_queue
+            .iter()
+            .map(|opportunity| {
+                let status = match opportunity.status {
+                    SpeculativeOpportunityStatus::Queued => "queued",
+                    SpeculativeOpportunityStatus::Running => "running",
+                    SpeculativeOpportunityStatus::Completed => "completed",
+                    SpeculativeOpportunityStatus::Expired => "expired",
+                    SpeculativeOpportunityStatus::Consumed => "consumed",
+                    SpeculativeOpportunityStatus::Dropped => "dropped",
+                };
+                serde_json::json!({
+                    "id": opportunity.id,
+                    "thread_id": opportunity.thread_id,
+                    "source_kind": opportunity.source_kind,
+                    "action_kind": opportunity.action_kind,
+                    "confidence": opportunity.confidence,
+                    "summary": opportunity.summary,
+                    "created_at_ms": opportunity.created_at_ms,
+                    "expires_at_ms": opportunity.expires_at_ms,
+                    "expires_in_ms": opportunity.expires_at_ms.saturating_sub(diagnostics_now),
+                    "status": status,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut speculative_results = anticipatory_runtime
+            .speculative_results_by_thread
+            .iter()
+            .flat_map(|(thread_id, results)| {
+                let thread_id = thread_id.clone();
+                results.iter().map(move |result| {
+                    serde_json::json!({
+                        "thread_id": thread_id,
+                        "opportunity_id": result.opportunity_id,
+                        "action_kind": result.action_kind,
+                        "summary": result.summary,
+                        "artifact": result.artifact,
+                        "completed_at_ms": result.completed_at_ms,
+                        "expires_at_ms": result.expires_at_ms,
+                        "expires_in_ms": result.expires_at_ms.saturating_sub(diagnostics_now),
+                        "is_expired": result.expires_at_ms <= diagnostics_now,
+                        "used": result.used_at_ms.is_some(),
+                        "used_at_ms": result.used_at_ms,
+                        "precomputation_id": result.precomputation_id,
+                    })
+                })
+            })
+            .collect::<Vec<_>>();
+        speculative_results.sort_by(|left, right| {
+            right
+                .get("completed_at_ms")
+                .and_then(|value| value.as_u64())
+                .cmp(&left.get("completed_at_ms").and_then(|value| value.as_u64()))
+                .then(
+                    left.get("thread_id")
+                        .and_then(|value| value.as_str())
+                        .cmp(&right.get("thread_id").and_then(|value| value.as_str())),
+                )
+        });
+        let proactive_provenance = self
+            .history
+            .provenance_report(32)
+            .map(|report| crate::agent::provenance::proactive_provenance_summary(&report, 5))
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "failed to build proactive provenance diagnostics summary");
+                serde_json::json!({
+                    "prepared_count": 0,
+                    "used_count": 0,
+                    "prepared_cache_count": 0,
+                    "used_cache_count": 0,
+                    "prepared_speculative_count": 0,
+                    "used_speculative_count": 0,
+                    "recent_event_count": 0,
+                    "recent_events": [],
+                })
+            });
+        let adaptive_carryover = self
+            .history
+            .provenance_report(32)
+            .map(|report| {
+                crate::agent::provenance::adaptive_carryover_provenance_summary(&report, 5)
+            })
+            .ok()
+            .filter(|summary| {
+                !crate::agent::provenance::adaptive_carryover_is_effectively_empty(summary)
+            });
 
         serde_json::json!({
             "operator_profile_sync_state": sync_state,
@@ -1370,6 +1533,14 @@ impl AgentEngine {
             "recursive_subagents": recursive_subagents,
             "proactive_suppression": proactive_suppression,
             "system_outcome_foresight": system_outcome_foresight,
+            "proactive_provenance": proactive_provenance,
+            "adaptive_carryover": adaptive_carryover,
+            "speculative_execution": {
+                "queue_depth": speculative_queue.len(),
+                "queued_opportunities": speculative_queue,
+                "cached_result_count": speculative_results.len(),
+                "cached_results": speculative_results,
+            },
             "operator_satisfaction": {
                 "label": operator_model.operator_satisfaction.label,
                 "score": operator_model.operator_satisfaction.score,
@@ -1394,6 +1565,7 @@ impl AgentEngine {
             "forge_reflection": {
                 "recent_passes": recent_forge_passes,
             },
+            "emergent_protocols": emergent_protocols,
             "meta_cognitive_self_model": meta_cognitive_self_model,
             "cognitive_resonance": cognitive_resonance,
             "aline": {

@@ -1,8 +1,8 @@
 use super::*;
 use crate::agent::llm_client::CopilotInitiator;
 use crate::agent::provider_resolution::apply_provider_model_override;
-use zorai_protocol::SecurityLevel;
 use std::path::Path;
+use zorai_protocol::SecurityLevel;
 
 const COMMUNITY_SCOUT_RESULT_LIMIT: usize = 5;
 const PARTICIPANT_AGENT_FANOUT_TOOLS: &[&str] = &[

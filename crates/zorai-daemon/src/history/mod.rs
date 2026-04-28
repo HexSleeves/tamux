@@ -5,17 +5,17 @@ use crate::agent::types::{
     AgentTask, AgentTaskLogEntry, GoalRun, GoalRunEvent, GoalRunStatus, GoalRunStep,
     GoalRunStepKind, GoalRunStepStatus, TaskLogLevel, TaskPriority, TaskStatus,
 };
+use anyhow::{Context, Result};
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use tokio_rusqlite;
 use zorai_protocol::{
     AgentDbMessage, AgentDbThread, AgentEventRow, AgentStatisticsSnapshot, AgentStatisticsTotals,
     AgentStatisticsWindow, CommandLogEntry, GatewayHealthState, HistorySearchHit,
     ModelStatisticsRow, ProviderStatisticsRow, SnapshotIndexEntry, TranscriptIndexEntry,
     WormChainTip,
 };
-use anyhow::{Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
-use serde_json::json;
-use tokio_rusqlite;
 
 /// Helper trait to convert any error into `tokio_rusqlite::Error` inside `.call()` closures.
 trait IntoCallError<T> {

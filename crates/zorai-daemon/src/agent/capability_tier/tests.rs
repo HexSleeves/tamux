@@ -4,9 +4,9 @@ use crate::agent::types::{
     AgentConfig, ApiTransport, AuthSource, LatestSkillDiscoveryState, ProviderConfig,
 };
 use crate::session_manager::SessionManager;
-use zorai_protocol::DaemonMessage;
 use std::sync::Arc;
 use tempfile::TempDir;
+use zorai_protocol::DaemonMessage;
 
 fn now_millis_local() -> u64 {
     std::time::SystemTime::now()

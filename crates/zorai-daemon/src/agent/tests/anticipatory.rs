@@ -2459,7 +2459,10 @@ async fn seeded_default_disk_pressure_trigger_queues_approval_without_manual_reg
     assert_eq!(engine.pending_operator_approvals.read().await.len(), 1);
 
     let handled = engine
-        .handle_task_approval_resolution(&approval_id, zorai_protocol::ApprovalDecision::ApproveOnce)
+        .handle_task_approval_resolution(
+            &approval_id,
+            zorai_protocol::ApprovalDecision::ApproveOnce,
+        )
         .await;
     assert!(
         handled,
@@ -2696,7 +2699,10 @@ async fn high_risk_event_trigger_queues_approval_before_weles_dispatch() {
     assert_eq!(engine.pending_operator_approvals.read().await.len(), 1);
 
     let handled = engine
-        .handle_task_approval_resolution(&approval_id, zorai_protocol::ApprovalDecision::ApproveOnce)
+        .handle_task_approval_resolution(
+            &approval_id,
+            zorai_protocol::ApprovalDecision::ApproveOnce,
+        )
         .await;
     assert!(handled, "approval resolution should resume the event task");
 
@@ -2869,6 +2875,103 @@ async fn anticipatory_prompt_context_marks_cached_precomputation_used() {
 }
 
 #[tokio::test]
+async fn anticipatory_prompt_context_records_proactive_cache_provenance() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.enabled = true;
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let repo_root = root.path().join("repo-proactive-provenance");
+    std::fs::create_dir_all(&repo_root).unwrap();
+    std::fs::write(repo_root.join("tracked.txt"), "hello\n").unwrap();
+    std::fs::write(repo_root.join("dirty.txt"), "dirty\n").unwrap();
+    std::process::Command::new("git")
+        .arg("init")
+        .arg(&repo_root)
+        .output()
+        .expect("git init should succeed");
+    std::process::Command::new("git")
+        .current_dir(&repo_root)
+        .args(["config", "user.email", "spec@example.com"])
+        .output()
+        .expect("git config email should succeed");
+    std::process::Command::new("git")
+        .current_dir(&repo_root)
+        .args(["config", "user.name", "Spec Test"])
+        .output()
+        .expect("git config name should succeed");
+    std::process::Command::new("git")
+        .current_dir(&repo_root)
+        .args(["add", "tracked.txt"])
+        .output()
+        .expect("git add should succeed");
+    std::process::Command::new("git")
+        .current_dir(&repo_root)
+        .args(["commit", "-m", "init"])
+        .output()
+        .expect("git commit should succeed");
+
+    engine.thread_work_contexts.write().await.insert(
+        "thread-proactive-provenance".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-proactive-provenance".to_string(),
+            entries: vec![WorkContextEntry {
+                path: repo_root.join("dirty.txt").to_string_lossy().to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "test".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some(repo_root.to_string_lossy().to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+
+    engine
+        .refresh_anticipatory_prewarm_cache("thread-proactive-provenance")
+        .await;
+
+    let context = engine
+        .build_anticipatory_prompt_context("thread-proactive-provenance")
+        .await
+        .expect("prompt context should exist");
+    assert!(context.contains("Cached precomputation"));
+
+    let report = engine
+        .history
+        .provenance_report(16)
+        .expect("provenance report");
+    assert_eq!(
+        report
+            .summary_by_event
+            .get(crate::agent::provenance::PROVENANCE_EVENT_PROACTIVE_CACHE_PREPARED)
+            .copied(),
+        Some(1)
+    );
+    assert_eq!(
+        report
+            .summary_by_event
+            .get(crate::agent::provenance::PROVENANCE_EVENT_PROACTIVE_CACHE_USED)
+            .copied(),
+        Some(1)
+    );
+    assert!(report.entries.iter().any(|entry| {
+        entry.event_type == crate::agent::provenance::PROVENANCE_EVENT_PROACTIVE_CACHE_PREPARED
+            && entry.thread_id.as_deref() == Some("thread-proactive-provenance")
+    }));
+    assert!(report.entries.iter().any(|entry| {
+        entry.event_type == crate::agent::provenance::PROVENANCE_EVENT_PROACTIVE_CACHE_USED
+            && entry.thread_id.as_deref() == Some("thread-proactive-provenance")
+    }));
+}
+
+#[tokio::test]
 async fn speculative_queue_admits_high_confidence_items_and_dedupes_by_thread_and_action() {
     let root = tempdir().unwrap();
     let manager = SessionManager::new_test(root.path()).await;
@@ -2947,7 +3050,12 @@ async fn speculative_queue_rejects_unsafe_or_low_confidence_items() {
         .build_speculative_execution_queue(&[low_confidence, unsupported])
         .await;
 
-    assert!(engine.anticipatory.read().await.opportunity_queue.is_empty());
+    assert!(engine
+        .anticipatory
+        .read()
+        .await
+        .opportunity_queue
+        .is_empty());
 }
 
 #[tokio::test]
@@ -3041,7 +3149,10 @@ async fn speculative_queue_execution_persists_result_and_retrieval_marks_usage()
     let second = engine
         .take_matching_speculative_result("thread-spec-run", "repo_context_refresh")
         .await;
-    assert!(second.is_none(), "used speculative results should not be reused");
+    assert!(
+        second.is_none(),
+        "used speculative results should not be reused"
+    );
 
     let pattern_id = engine
         .history
@@ -3067,6 +3178,128 @@ async fn speculative_queue_execution_persists_result_and_retrieval_marks_usage()
         .await
         .expect("precomputation log should load");
     assert!(logs.iter().any(|row| row.was_used == Some(true)));
+}
+
+#[tokio::test]
+async fn speculative_queue_records_speculative_provenance_for_prepare_and_use() {
+    let root = tempdir().unwrap();
+    let manager = SessionManager::new_test(root.path()).await;
+    let mut config = AgentConfig::default();
+    config.enabled = true;
+    config.anticipatory.enabled = true;
+    let engine = AgentEngine::new_test(manager, config, root.path()).await;
+
+    let repo_root = root.path().join("repo-speculative-provenance");
+    std::fs::create_dir_all(&repo_root).unwrap();
+    std::fs::write(repo_root.join("tracked.txt"), "hello\n").unwrap();
+    std::fs::write(repo_root.join("dirty.txt"), "dirty\n").unwrap();
+    std::process::Command::new("git")
+        .arg("init")
+        .arg(&repo_root)
+        .output()
+        .expect("git init should succeed");
+    std::process::Command::new("git")
+        .current_dir(&repo_root)
+        .args(["config", "user.email", "spec@example.com"])
+        .output()
+        .expect("git config email should succeed");
+    std::process::Command::new("git")
+        .current_dir(&repo_root)
+        .args(["config", "user.name", "Spec Test"])
+        .output()
+        .expect("git config name should succeed");
+    std::process::Command::new("git")
+        .current_dir(&repo_root)
+        .args(["add", "tracked.txt"])
+        .output()
+        .expect("git add should succeed");
+    std::process::Command::new("git")
+        .current_dir(&repo_root)
+        .args(["commit", "-m", "init"])
+        .output()
+        .expect("git commit should succeed");
+
+    engine
+        .record_operator_attention(
+            "conversation:chat",
+            Some("thread-speculative-provenance"),
+            None,
+        )
+        .await
+        .unwrap();
+    engine.thread_work_contexts.write().await.insert(
+        "thread-speculative-provenance".to_string(),
+        ThreadWorkContext {
+            thread_id: "thread-speculative-provenance".to_string(),
+            entries: vec![WorkContextEntry {
+                path: repo_root.join("dirty.txt").to_string_lossy().to_string(),
+                previous_path: None,
+                kind: WorkContextEntryKind::RepoChange,
+                source: "test".to_string(),
+                change_kind: Some("modified".to_string()),
+                repo_root: Some(repo_root.to_string_lossy().to_string()),
+                goal_run_id: None,
+                step_index: None,
+                session_id: None,
+                is_text: true,
+                updated_at: now_millis(),
+            }],
+        },
+    );
+
+    let item = AnticipatoryItem {
+        id: "intent-spec-provenance".to_string(),
+        kind: "intent_prediction".to_string(),
+        title: "Likely Next Action".to_string(),
+        summary: "Predicted next step: inspect repo context".to_string(),
+        bullets: vec![],
+        intent_prediction: None,
+        confidence: 0.93,
+        goal_run_id: None,
+        thread_id: Some("thread-speculative-provenance".to_string()),
+        preferred_client_surface: None,
+        preferred_attention_surface: None,
+        created_at: now_millis(),
+        updated_at: now_millis(),
+    };
+
+    engine.build_speculative_execution_queue(&[item]).await;
+    engine.run_speculative_execution_queue().await;
+    let result = engine
+        .take_matching_speculative_result(
+            "thread-speculative-provenance",
+            SPECULATIVE_ACTION_REPO_CONTEXT_REFRESH,
+        )
+        .await
+        .expect("speculative result should be retrievable");
+    assert!(result.summary.contains("branch"));
+
+    let report = engine
+        .history
+        .provenance_report(20)
+        .expect("provenance report");
+    assert_eq!(
+        report
+            .summary_by_event
+            .get(crate::agent::provenance::PROVENANCE_EVENT_SPECULATIVE_RESULT_PREPARED)
+            .copied(),
+        Some(1)
+    );
+    assert_eq!(
+        report
+            .summary_by_event
+            .get(crate::agent::provenance::PROVENANCE_EVENT_SPECULATIVE_RESULT_USED)
+            .copied(),
+        Some(1)
+    );
+    assert!(report.entries.iter().any(|entry| {
+        entry.event_type == crate::agent::provenance::PROVENANCE_EVENT_SPECULATIVE_RESULT_PREPARED
+            && entry.thread_id.as_deref() == Some("thread-speculative-provenance")
+    }));
+    assert!(report.entries.iter().any(|entry| {
+        entry.event_type == crate::agent::provenance::PROVENANCE_EVENT_SPECULATIVE_RESULT_USED
+            && entry.thread_id.as_deref() == Some("thread-speculative-provenance")
+    }));
 }
 
 #[tokio::test]
