@@ -1123,7 +1123,7 @@ mod tests {
 
     #[test]
     fn tui_log_filter_defaults_to_error_only() {
-        let filter = build_log_filter(None, None, None);
+        let filter = build_log_filter(None, None);
 
         assert_eq!(filter.to_string(), "error");
     }

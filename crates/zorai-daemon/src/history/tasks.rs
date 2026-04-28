@@ -30,6 +30,15 @@ fn parse_supervisor_config_json(
     value.and_then(|json| serde_json::from_str::<crate::agent::types::SupervisorConfig>(&json).ok())
 }
 
+fn preserve_notification_lifecycle_state(
+    notification: &mut zorai_protocol::InboxNotification,
+    existing: zorai_protocol::InboxNotification,
+) {
+    notification.read_at = notification.read_at.or(existing.read_at);
+    notification.archived_at = notification.archived_at.or(existing.archived_at);
+    notification.deleted_at = notification.deleted_at.or(existing.deleted_at);
+}
+
 impl HistoryStore {
     pub async fn upsert_notification(
         &self,
@@ -37,6 +46,28 @@ impl HistoryStore {
     ) -> Result<()> {
         let row = crate::notifications::notification_event_row(notification)?;
         self.upsert_agent_event(&row).await
+    }
+
+    async fn get_notification_by_id(
+        &self,
+        notification_id: &str,
+    ) -> Result<Option<zorai_protocol::InboxNotification>> {
+        let notification_id = notification_id.to_string();
+        self.conn
+            .call(move |conn| {
+                let payload_json: Option<String> = conn
+                    .query_row(
+                        "SELECT payload_json FROM agent_events WHERE id = ?1 AND category = ?2",
+                        params![notification_id, crate::notifications::NOTIFICATION_CATEGORY],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                Ok(payload_json.and_then(|json| {
+                    serde_json::from_str::<zorai_protocol::InboxNotification>(&json).ok()
+                }))
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn list_notifications(
@@ -69,7 +100,13 @@ impl HistoryStore {
     }
 
     pub async fn upsert_agent_event(&self, entry: &AgentEventRow) -> Result<()> {
-        let entry = entry.clone();
+        let mut entry = entry.clone();
+        if let Some(mut notification) = crate::notifications::parse_notification_row(&entry) {
+            if let Some(existing) = self.get_notification_by_id(&notification.id).await? {
+                preserve_notification_lifecycle_state(&mut notification, existing);
+                entry = crate::notifications::notification_event_row(&notification)?;
+            }
+        }
         let search_document = super::search_index::SearchDocument {
             source_kind: super::search_index::SearchSourceKind::AgentEvent,
             source_id: entry.id.clone(),
