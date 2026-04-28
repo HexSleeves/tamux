@@ -1,5 +1,5 @@
-use zorai_protocol::{WorkspaceActor, WorkspacePriority, WorkspaceTask, WorkspaceTaskUpdate};
 use crossterm::event::{KeyCode, KeyModifiers};
+use zorai_protocol::{WorkspaceActor, WorkspacePriority, WorkspaceTask, WorkspaceTaskUpdate};
 
 use crate::state::{modal, DaemonCommand};
 

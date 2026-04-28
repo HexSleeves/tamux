@@ -1,13 +1,13 @@
 use super::*;
+use ratatui::backend::TestBackend;
+use ratatui::layout::Rect;
+use ratatui::Terminal;
+use tokio::sync::mpsc::unbounded_channel;
 use zorai_shared::providers::{
     AudioToolKind, PROVIDER_ID_ALIBABA_CODING_PLAN, PROVIDER_ID_AZURE_OPENAI, PROVIDER_ID_CHUTES,
     PROVIDER_ID_CUSTOM, PROVIDER_ID_OPENAI, PROVIDER_ID_OPENROUTER, PROVIDER_ID_QWEN,
     PROVIDER_ID_XAI,
 };
-use ratatui::backend::TestBackend;
-use ratatui::layout::Rect;
-use ratatui::Terminal;
-use tokio::sync::mpsc::unbounded_channel;
 
 fn make_model() -> (
     TuiModel,

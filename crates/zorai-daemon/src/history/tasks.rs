@@ -39,6 +39,27 @@ fn preserve_notification_lifecycle_state(
     notification.deleted_at = notification.deleted_at.or(existing.deleted_at);
 }
 
+fn agent_event_search_document(
+    entry: &AgentEventRow,
+) -> Option<super::search_index::SearchDocument> {
+    if entry.category == crate::notifications::NOTIFICATION_CATEGORY {
+        return None;
+    }
+
+    Some(super::search_index::SearchDocument {
+        source_kind: super::search_index::SearchSourceKind::AgentEvent,
+        source_id: entry.id.clone(),
+        title: format!("{} {}", entry.category, entry.kind),
+        body: entry.payload_json.clone(),
+        tags: vec![entry.category.clone(), entry.kind.clone()],
+        workspace_id: entry.workspace_id.as_ref().map(|id| id.to_string()),
+        thread_id: None,
+        agent_id: None,
+        timestamp: entry.timestamp,
+        metadata_json: Some(entry.payload_json.clone()),
+    })
+}
+
 impl HistoryStore {
     pub async fn upsert_notification(
         &self,
@@ -107,38 +128,32 @@ impl HistoryStore {
                 entry = crate::notifications::notification_event_row(&notification)?;
             }
         }
-        let search_document = super::search_index::SearchDocument {
-            source_kind: super::search_index::SearchSourceKind::AgentEvent,
-            source_id: entry.id.clone(),
-            title: format!("{} {}", entry.category, entry.kind),
-            body: entry.payload_json.clone(),
-            tags: vec![entry.category.clone(), entry.kind.clone()],
-            workspace_id: entry.workspace_id.as_ref().map(|id| id.to_string()),
-            thread_id: None,
-            agent_id: None,
-            timestamp: entry.timestamp,
-            metadata_json: Some(entry.payload_json.clone()),
-        };
-        self.conn.call(move |conn| {
-        conn.execute(
-            "INSERT OR REPLACE INTO agent_events \
-             (id, category, kind, pane_id, workspace_id, surface_id, session_id, payload_json, timestamp) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![
-                entry.id,
-                entry.category,
-                entry.kind,
-                entry.pane_id,
-                entry.workspace_id,
-                entry.surface_id,
-                entry.session_id,
-                entry.payload_json,
-                entry.timestamp,
-            ],
-        )?;
-        Ok(())
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-        self.upsert_search_document(search_document);
+        let search_document = agent_event_search_document(&entry);
+        self.conn
+            .call(move |conn| {
+                conn.execute(
+                    "INSERT OR REPLACE INTO agent_events \
+                     (id, category, kind, pane_id, workspace_id, surface_id, session_id, payload_json, timestamp) \
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        entry.id,
+                        entry.category,
+                        entry.kind,
+                        entry.pane_id,
+                        entry.workspace_id,
+                        entry.surface_id,
+                        entry.session_id,
+                        entry.payload_json,
+                        entry.timestamp,
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if let Some(search_document) = search_document {
+            self.upsert_search_document(search_document);
+        }
         Ok(())
     }
 

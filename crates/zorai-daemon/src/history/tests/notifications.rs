@@ -116,3 +116,26 @@ async fn upsert_agent_event_preserves_notification_lifecycle_state() -> Result<(
     fs::remove_dir_all(root)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn upsert_agent_event_does_not_wait_for_tantivy_writer() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    let raw_index = tantivy::Index::open_in_dir(root.join("search-index").join("tantivy"))?;
+    let _held_writer = raw_index.writer::<tantivy::schema::TantivyDocument>(50_000_000)?;
+    let notification = sample_notification("notif_1", 100, None, None);
+
+    let started = std::time::Instant::now();
+    store
+        .upsert_agent_event(&crate::notifications::notification_event_row(
+            &notification,
+        )?)
+        .await?;
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(150),
+        "notification upsert waited for the tantivy writer"
+    );
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

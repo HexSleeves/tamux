@@ -2,6 +2,40 @@ use super::*;
 
 // ── Consolidation state tests (Phase 5) ──────────────────────────────
 
+async fn wait_for_search_hits(
+    store: &HistoryStore,
+    query: &str,
+    limit: usize,
+) -> Result<(String, Vec<HistorySearchHit>)> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let result = store.search(query, limit).await?;
+        if !result.1.is_empty() || std::time::Instant::now() >= deadline {
+            return Ok(result);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
+async fn wait_for_search_hits_matching<F>(
+    store: &HistoryStore,
+    query: &str,
+    limit: usize,
+    mut matches: F,
+) -> Result<(String, Vec<HistorySearchHit>)>
+where
+    F: FnMut(&[HistorySearchHit]) -> bool,
+{
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let result = store.search(query, limit).await?;
+        if matches(&result.1) || std::time::Instant::now() >= deadline {
+            return Ok(result);
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
 #[tokio::test]
 async fn consolidation_state_set_get_round_trips() -> Result<()> {
     let (store, root) = make_test_store().await?;
@@ -55,7 +89,7 @@ async fn search_returns_history_hits_from_fts_join() -> Result<()> {
 
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].title, "cargo build --workspace");
-    assert!(summary.contains("Found 1 searchable matches"));
+    assert!(summary.contains("Found 1 historical matches"));
 
     fs::remove_dir_all(root)?;
     Ok(())
@@ -89,7 +123,7 @@ async fn search_uses_tantivy_when_sqlite_fts_projection_is_missing() -> Result<(
         .await
         .map_err(|e| anyhow::anyhow!("add agent message: {e}"))?;
 
-    let (summary, hits) = store.search("tantivy projection", 8).await?;
+    let (summary, hits) = wait_for_search_hits(&store, "tantivy projection", 8).await?;
 
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].id, "exec-tantivy");
@@ -240,8 +274,16 @@ async fn search_indexes_support_capability_documents() -> Result<()> {
         .await
         .map_err(|e| anyhow::anyhow!("replace cognitive biases: {e}"))?;
 
-    let (_summary, hits) = store
-        .search("counterfactual failed tool migration", 10)
+    let (_summary, hits) =
+        wait_for_search_hits_matching(&store, "counterfactual failed tool migration", 10, |hits| {
+            let kinds = hits.iter().map(|hit| hit.kind.as_str()).collect::<Vec<_>>();
+            kinds.contains(&"agent_message")
+                && kinds.contains(&"agent_event")
+                && kinds.contains(&"causal_trace")
+                && kinds.contains(&"action_audit")
+                && kinds.contains(&"counterfactual")
+                && kinds.contains(&"meta_cognition")
+        })
         .await?;
     let kinds = hits.iter().map(|hit| hit.kind.as_str()).collect::<Vec<_>>();
 

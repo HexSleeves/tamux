@@ -1,9 +1,9 @@
 use super::*;
+use ratatui::backend::TestBackend;
 use zorai_protocol::{
     WorkspaceActor, WorkspaceNotice, WorkspacePriority, WorkspaceSettings, WorkspaceTask,
     WorkspaceTaskStatus, WorkspaceTaskType,
 };
-use ratatui::backend::TestBackend;
 
 fn render_plain_text(workspace: &WorkspaceState, area: Rect) -> String {
     let backend = TestBackend::new(area.width, area.height);

@@ -336,3 +336,32 @@ fn tantivy_index_gives_up_quickly_when_external_writer_lock_stays_busy() -> Resu
 
     Ok(())
 }
+
+#[tokio::test]
+async fn history_store_single_document_indexing_queues_when_writer_is_busy() -> Result<()> {
+    let (store, root) = make_test_store().await?;
+    let raw_index = tantivy::Index::open_in_dir(root.join("search-index").join("tantivy"))?;
+    let _held_writer = raw_index.writer::<tantivy::schema::TantivyDocument>(50_000_000)?;
+
+    let started = std::time::Instant::now();
+    store.upsert_search_document(crate::history::search_index::SearchDocument {
+        source_kind: crate::history::search_index::SearchSourceKind::HistoryEntry,
+        source_id: "queued-history-entry".to_string(),
+        title: "queued history entry".to_string(),
+        body: "single document index writes should be queued".to_string(),
+        tags: vec!["managed-command".to_string()],
+        workspace_id: None,
+        thread_id: None,
+        agent_id: None,
+        timestamp: 30,
+        metadata_json: None,
+    });
+
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(50),
+        "single-document indexing waited for the tantivy writer"
+    );
+
+    fs::remove_dir_all(root)?;
+    Ok(())
+}

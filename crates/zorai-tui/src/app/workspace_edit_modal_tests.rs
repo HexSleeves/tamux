@@ -1,9 +1,9 @@
 use super::workspace_edit_modal::*;
 use crate::state::{modal, DaemonCommand};
+use tokio::sync::mpsc::unbounded_channel;
 use zorai_protocol::{
     WorkspaceActor, WorkspacePriority, WorkspaceTask, WorkspaceTaskStatus, WorkspaceTaskType,
 };
-use tokio::sync::mpsc::unbounded_channel;
 
 fn task() -> WorkspaceTask {
     WorkspaceTask {

@@ -20,7 +20,7 @@ export function ZoraiNavIcon({ icon }: IconProps) {
 export function ZoraiBrandMark() {
   return (
     <div className="zorai-brand-mark" aria-hidden="true">
-      <span>Z</span>
+      <span></span>
     </div>
   );
 }

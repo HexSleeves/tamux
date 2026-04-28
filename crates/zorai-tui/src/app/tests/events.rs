@@ -1,11 +1,11 @@
 #[cfg(test)]
 use super::*;
-use zorai_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::sync::{LazyLock, Mutex};
 use tokio::sync::mpsc::unbounded_channel;
+use zorai_shared::providers::{PROVIDER_ID_GITHUB_COPILOT, PROVIDER_ID_OPENAI};
 
 fn make_model() -> TuiModel {
     let (_event_tx, event_rx) = std::sync::mpsc::channel();
@@ -7481,7 +7481,9 @@ fn unconfigured_mokosh_participant_prompt_opens_setup_and_retries_after_model_se
 
     let provider_index = widgets::provider_picker::available_provider_defs(&model.auth)
         .iter()
-        .position(|provider| provider.id == zorai_shared::providers::PROVIDER_ID_ALIBABA_CODING_PLAN)
+        .position(|provider| {
+            provider.id == zorai_shared::providers::PROVIDER_ID_ALIBABA_CODING_PLAN
+        })
         .expect("provider to exist");
     if provider_index > 0 {
         model
@@ -7584,7 +7586,9 @@ fn unconfigured_builtin_participant_prompt_opens_setup_and_retries_after_model_s
 
     let provider_index = widgets::provider_picker::available_provider_defs(&model.auth)
         .iter()
-        .position(|provider| provider.id == zorai_shared::providers::PROVIDER_ID_ALIBABA_CODING_PLAN)
+        .position(|provider| {
+            provider.id == zorai_shared::providers::PROVIDER_ID_ALIBABA_CODING_PLAN
+        })
         .expect("provider to exist");
     if provider_index > 0 {
         model

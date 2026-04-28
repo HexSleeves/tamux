@@ -443,28 +443,8 @@ impl SearchIndex {
 
 impl super::HistoryStore {
     pub(crate) fn upsert_search_document(&self, document: SearchDocument) {
-        let Some(index) = &self.search_index else {
-            return;
-        };
-        let source_kind = document.source_kind.as_str();
-        let source_id = document.source_id.clone();
-        if let Err(error) = index.upsert(document) {
-            if error_contains_writer_lock_busy(&error) {
-                tracing::debug!(
-                    error = %error,
-                    source_kind,
-                    source_id,
-                    "tantivy writer busy; skipping search index upsert"
-                );
-            } else {
-                tracing::warn!(
-                    error = %error,
-                    source_kind,
-                    source_id,
-                    "failed to upsert document into tantivy search index"
-                );
-            }
-        }
+        let source_kind = document.source_kind;
+        self.apply_search_index_changes_background(vec![document], source_kind, Vec::new());
     }
 
     pub(crate) fn upsert_search_documents_background(&self, documents: Vec<SearchDocument>) {

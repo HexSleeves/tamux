@@ -71,7 +71,9 @@ fn next_workspace_status_for_commands(
     status: &zorai_protocol::WorkspaceTaskStatus,
 ) -> zorai_protocol::WorkspaceTaskStatus {
     match status {
-        zorai_protocol::WorkspaceTaskStatus::Todo => zorai_protocol::WorkspaceTaskStatus::InProgress,
+        zorai_protocol::WorkspaceTaskStatus::Todo => {
+            zorai_protocol::WorkspaceTaskStatus::InProgress
+        }
         zorai_protocol::WorkspaceTaskStatus::InProgress => {
             zorai_protocol::WorkspaceTaskStatus::InReview
         }

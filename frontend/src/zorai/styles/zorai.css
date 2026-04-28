@@ -66,8 +66,7 @@
   border-radius: 7px;
   display: grid;
   place-items: center;
-  background: linear-gradient(135deg, rgba(119, 216, 197, 0.95), rgba(230, 237, 247, 0.96));
-  box-shadow: 0 10px 30px rgba(119, 216, 197, 0.18);
+  background: url(./assets/icon.png) center/contain no-repeat;
 }
 
 .zorai-brand-mark span {
