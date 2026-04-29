@@ -337,7 +337,7 @@ async fn replace_thread_snapshot_replaces_messages_without_losing_thread_row() -
 }
 
 #[tokio::test]
-async fn replace_thread_snapshot_removes_pruned_messages_from_search_index() -> Result<()> {
+async fn replace_thread_snapshot_removes_pruned_messages_from_sqlite_search() -> Result<()> {
     let (store, root) = make_test_store().await?;
     let thread_id = "snapshot-search-prune-thread";
     let thread = AgentDbThread {
@@ -551,8 +551,8 @@ async fn replace_thread_snapshot_does_not_regress_to_stale_snapshot() -> Result<
 }
 
 #[tokio::test]
-async fn reconcile_thread_snapshot_updates_changed_messages_without_pruning_missing_ones() -> Result<()>
-{
+async fn reconcile_thread_snapshot_updates_changed_messages_without_pruning_missing_ones(
+) -> Result<()> {
     let (store, root) = make_test_store().await?;
     let thread_id = "thread-reconcile-snapshot";
     let base_thread = AgentDbThread {

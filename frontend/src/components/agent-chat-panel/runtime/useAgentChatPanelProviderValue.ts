@@ -23,6 +23,7 @@ import {
   hydrateDaemonThreadIntoLocalState,
   loadDaemonThreadPageIntoLocalState,
   reloadDaemonThreadIntoLocalState,
+  trimDaemonThreadMessagesToLatestWindow,
 } from "./daemonHelpers";
 import { useLegacyAgentMessaging } from "./useLegacyAgentMessaging";
 import type { AgentChatPanelRuntimeValue, AgentChatPanelView } from "./types";
@@ -757,6 +758,16 @@ export function useAgentChatPanelProviderValue(): {
     return loadThreadPage(activeThreadId, "older");
   }, [activeThreadId, loadThreadPage]);
 
+  const trimThreadMessagesToLatestWindow = useCallback((threadId?: string | null) => {
+    const localThreadId = threadId ?? activeThreadId;
+    if (!localThreadId) return false;
+    const messageLimit = resolveReactChatHistoryMessageLimit(agentSettings.react_chat_history_page_size);
+    return trimDaemonThreadMessagesToLatestWindow({
+      localThreadId,
+      messageLimit,
+    });
+  }, [activeThreadId, agentSettings.react_chat_history_page_size]);
+
   const sendMessage = useCallback((payload: { text: string; contentBlocksJson?: string | null; localContentBlocks?: import("@/lib/agentStore/types").AgentContentBlock[] }) => {
     if (!payload.text) return;
     if (shouldUseDaemonRuntime(agentSettings.agent_backend) && sendDaemonMessage(payload)) {
@@ -905,6 +916,7 @@ export function useAgentChatPanelProviderValue(): {
     setSearchQuery,
     refreshThreadList,
     loadOlderThreadMessages,
+    trimThreadMessagesToLatestWindow,
     messages,
     todos,
     daemonTodosByThread,
@@ -1009,6 +1021,7 @@ export function useAgentChatPanelProviderValue(): {
     canOpenSpawnedThread,
     openSpawnedThread,
     loadOlderThreadMessages,
+    trimThreadMessagesToLatestWindow,
     openThread,
     refreshThreadList,
     setActiveThread,

@@ -130,6 +130,53 @@ async fn database_viewer_sorts_rows_by_selected_column() {
 }
 
 #[tokio::test]
+async fn database_viewer_includes_soft_deleted_rows_in_raw_table_dump() {
+    let (store, root) = make_test_store().await.expect("create history store");
+
+    store
+        .conn
+        .call(|conn| {
+            conn.execute(
+                "CREATE TABLE database_viewer_deleted_items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, deleted_at INTEGER)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO database_viewer_deleted_items (name, deleted_at) VALUES ('visible', NULL), ('trashed', 12345)",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("seed soft-deleted table rows");
+
+    let tables = store
+        .list_database_tables()
+        .await
+        .expect("list database tables");
+    let table = tables
+        .iter()
+        .find(|table| table.name == "database_viewer_deleted_items")
+        .expect("viewer table should be listed");
+    assert_eq!(table.row_count, Some(2));
+
+    let page = store
+        .query_database_table_rows("database_viewer_deleted_items", 0, 100, None, None)
+        .await
+        .expect("query viewer table");
+    assert_eq!(page.total_rows, 2);
+    assert_eq!(
+        page.rows
+            .iter()
+            .map(|row| row.values["name"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        ["visible", "trashed"],
+    );
+    assert_eq!(page.rows[1].values["deleted_at"], serde_json::json!(12345));
+
+    fs::remove_dir_all(root).expect("cleanup history root");
+}
+
+#[tokio::test]
 async fn database_viewer_rejects_unknown_update_columns() {
     let (store, root) = make_test_store().await.expect("create history store");
 

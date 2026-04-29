@@ -532,6 +532,41 @@ impl ConfigState {
             .unwrap_or("")
             .to_string()
     }
+
+    fn get_semantic_embedding_nested_field(&self, field: &str) -> Option<&serde_json::Value> {
+        self.agent_config_raw
+            .as_ref()
+            .and_then(|raw| raw.get("semantic"))
+            .and_then(|semantic| semantic.get("embedding"))
+            .and_then(|embedding| embedding.get(field))
+    }
+
+    pub fn semantic_embedding_enabled(&self) -> bool {
+        self.get_semantic_embedding_nested_field("enabled")
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    }
+
+    pub fn semantic_embedding_provider(&self) -> String {
+        self.get_semantic_embedding_nested_field("provider")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    pub fn semantic_embedding_model(&self) -> String {
+        self.get_semantic_embedding_nested_field("model")
+            .and_then(|value| value.as_str())
+            .unwrap_or("")
+            .to_string()
+    }
+
+    pub fn semantic_embedding_dimensions(&self) -> u32 {
+        self.get_semantic_embedding_nested_field("dimensions")
+            .and_then(|value| value.as_u64())
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(1536)
+    }
 }
 
 impl Default for ConfigState {

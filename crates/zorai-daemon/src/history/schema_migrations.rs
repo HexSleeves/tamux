@@ -160,6 +160,48 @@ pub(super) fn apply_schema_migrations(
 ) -> rusqlite::Result<()> {
     ensure_offloaded_payloads_schema(connection, offloaded_payloads_dir)?;
     connection.execute_batch(
+        "CREATE TABLE IF NOT EXISTS embedding_jobs (
+            source_kind TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            workspace_id TEXT,
+            thread_id TEXT,
+            agent_id TEXT,
+            source_timestamp INTEGER NOT NULL,
+            queued_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            claimed_at INTEGER,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            PRIMARY KEY (source_kind, source_id, chunk_id)
+        );
+        CREATE TABLE IF NOT EXISTS embedding_job_completions (
+            source_kind TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            chunk_id TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            embedding_model TEXT NOT NULL,
+            dimensions INTEGER NOT NULL,
+            completed_at INTEGER NOT NULL,
+            PRIMARY KEY (source_kind, source_id, chunk_id, embedding_model, dimensions)
+        );
+        CREATE INDEX IF NOT EXISTS idx_embedding_jobs_updated ON embedding_jobs(updated_at ASC);
+        CREATE INDEX IF NOT EXISTS idx_embedding_jobs_claimed ON embedding_jobs(claimed_at, updated_at);
+        CREATE TABLE IF NOT EXISTS embedding_deletions (
+            source_kind TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            queued_at INTEGER NOT NULL,
+            claimed_at INTEGER,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            PRIMARY KEY (source_kind, source_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_embedding_deletions_claimed ON embedding_deletions(claimed_at, queued_at);",
+    )?;
+    connection.execute_batch(
         "CREATE TABLE IF NOT EXISTS thread_structural_memory (
             thread_id TEXT PRIMARY KEY,
             state_json TEXT NOT NULL,

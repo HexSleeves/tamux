@@ -184,6 +184,8 @@ const bridgeApi = {
     dbListDatabaseTables: () => ipcRenderer.invoke('db-list-database-tables'),
     dbQueryDatabaseRows: (opts) => ipcRenderer.invoke('db-query-database-rows', opts),
     dbUpdateDatabaseRows: (tableName, updates) => ipcRenderer.invoke('db-update-database-rows', tableName, updates),
+    dbQueueSemanticBackfill: (limit) => ipcRenderer.invoke('db-queue-semantic-backfill', limit),
+    dbGetSemanticIndexStatus: (opts) => ipcRenderer.invoke('db-get-semantic-index-status', opts),
     onTerminalEvent: (cb) => {
         const listener = (_event, payload) => cb(payload);
         ipcRenderer.on('terminal-event', listener);

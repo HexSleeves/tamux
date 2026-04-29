@@ -117,6 +117,7 @@ export function buildDaemonAgentConfig(
     agentSettings.audio_stt_provider,
     agentSettings.audio_tts_provider,
     agentSettings.image_generation_provider,
+    agentSettings.semantic_embedding_provider,
   ]));
   const providerConfigs = Object.fromEntries(
     referencedProviderIds.flatMap((referencedProviderId) => {
@@ -236,6 +237,16 @@ export function buildDaemonAgentConfig(
       generation: {
         provider: agentSettings.image_generation_provider,
         model: agentSettings.image_generation_model,
+      },
+    },
+    semantic: {
+      embedding: {
+        enabled: agentSettings.semantic_embedding_enabled,
+        provider: agentSettings.semantic_embedding_provider,
+        model: agentSettings.semantic_embedding_model,
+        dimensions: Math.max(1, Math.floor(agentSettings.semantic_embedding_dimensions)),
+        batch_size: Math.max(1, Math.floor(agentSettings.semantic_embedding_batch_size)),
+        max_concurrency: Math.max(1, Math.floor(agentSettings.semantic_embedding_max_concurrency)),
       },
     },
     tools: {

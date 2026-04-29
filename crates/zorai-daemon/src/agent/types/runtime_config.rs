@@ -39,6 +39,21 @@ pub struct GatewayConfig {
 fn default_provider() -> String {
     PROVIDER_ID_OPENAI.into()
 }
+fn default_embedding_provider() -> String {
+    PROVIDER_ID_OPENAI.into()
+}
+fn default_embedding_model() -> String {
+    "text-embedding-3-small".into()
+}
+fn default_embedding_dimensions() -> u32 {
+    1536
+}
+fn default_embedding_batch_size() -> u32 {
+    64
+}
+fn default_embedding_max_concurrency() -> u32 {
+    2
+}
 fn default_api_transport() -> ApiTransport {
     default_api_transport_for_provider(PROVIDER_ID_OPENAI)
 }
@@ -213,6 +228,7 @@ impl Default for AgentConfig {
             consolidation: ConsolidationConfig::default(),
             skill_discovery: SkillDiscoveryConfig::default(),
             skill_recommendation: SkillRecommendationConfig::default(),
+            semantic: SemanticConfig::default(),
             routing: RoutingConfig::default(),
             skill_promotion: SkillPromotionConfig::default(),
             tier: TierConfig::default(),

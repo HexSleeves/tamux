@@ -367,6 +367,48 @@ async fn status_snapshot_includes_aline_diagnostics() {
 }
 
 #[tokio::test]
+async fn status_snapshot_uses_lightweight_polling_diagnostics() {
+    let mut config = AgentConfig::default();
+    config.operator_model.enabled = true;
+    config.operator_model.allow_message_statistics = true;
+    let (engine, _temp_dir) = make_test_engine(config).await;
+    engine
+        .record_operator_message("thread-diagnostics", "Please run tests.", true)
+        .await
+        .expect("record operator message");
+
+    let snapshot = engine.get_status_snapshot().await;
+    let DaemonMessage::AgentStatusResponse {
+        diagnostics_json, ..
+    } = snapshot
+    else {
+        panic!("expected agent status response");
+    };
+
+    let diagnostics: serde_json::Value = serde_json::from_str(&diagnostics_json).unwrap();
+    assert!(
+        diagnostics.get("operator_profile_sync_state").is_some(),
+        "status polling still needs profile sync diagnostics"
+    );
+    assert!(
+        diagnostics.get("aline").is_some(),
+        "status polling still needs Aline watcher diagnostics"
+    );
+    assert!(
+        diagnostics.get("skill_mesh").is_some(),
+        "status polling still needs skill mesh diagnostics"
+    );
+    assert!(
+        diagnostics.get("operator_satisfaction").is_none(),
+        "status polling must not include heavyweight operator-model diagnostics"
+    );
+    assert!(
+        diagnostics.get("emergent_protocols").is_none(),
+        "status polling must not enumerate per-thread protocol stores"
+    );
+}
+
+#[tokio::test]
 async fn status_snapshot_uses_cached_skill_gate_skip_rationale() {
     let mut config = AgentConfig::default();
     config.skill_recommendation.discovery_backend = "mesh".to_string();

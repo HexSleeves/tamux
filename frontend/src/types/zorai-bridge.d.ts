@@ -443,6 +443,8 @@ declare global {
         dbListDatabaseTables?: () => Promise<unknown[]>;
         dbQueryDatabaseRows?: (opts: { tableName: string; offset?: number; limit?: number; sortColumn?: string | null; sortDirection?: "asc" | "desc" | null }) => Promise<unknown>;
         dbUpdateDatabaseRows?: (tableName: string, updates: unknown[]) => Promise<{ updatedRows?: number; error?: string } | unknown>;
+        dbQueueSemanticBackfill?: (limit?: number | null) => Promise<unknown>;
+        dbGetSemanticIndexStatus?: (opts: { embeddingModel: string; dimensions: number }) => Promise<unknown>;
         startTerminalSession?: (options: {
             paneId: string;
             sessionId?: string | null;

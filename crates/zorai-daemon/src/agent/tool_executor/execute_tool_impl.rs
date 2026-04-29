@@ -1818,7 +1818,7 @@ async fn dispatch_tool_execution(
         "get_system_info" => execute_system_info().await,
         "get_current_datetime" => execute_current_datetime().await,
         "list_processes" => execute_list_processes(args).await,
-        "search_history" => execute_search_history(args, session_manager).await,
+        "search_history" => execute_search_history(args, agent).await,
         "fetch_gateway_history" => execute_fetch_gateway_history(args, agent, thread_id).await,
         "session_search" => execute_session_search(args, session_manager).await,
         "agent_query_memory" => execute_agent_query_memory(args, agent).await,

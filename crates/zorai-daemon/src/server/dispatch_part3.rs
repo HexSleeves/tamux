@@ -10,6 +10,8 @@ if matches!(
         ClientMessage::ListDatabaseTables |
         ClientMessage::QueryDatabaseRows{ .. } |
         ClientMessage::UpdateDatabaseRows{ .. } |
+        ClientMessage::QueueSemanticBackfill{ .. } |
+        ClientMessage::GetSemanticIndexStatus{ .. } |
         ClientMessage::GenerateSkill{ .. } |
         ClientMessage::FindSymbol{ .. } |
         ClientMessage::ListSnapshots{ .. } |
@@ -298,6 +300,48 @@ if matches!(
                             framed
                                 .send(DaemonMessage::Error {
                                     message: format!("invalid database update payload: {e}"),
+                                })
+                                .await?;
+                        }
+                    }
+                }
+
+                ClientMessage::QueueSemanticBackfill { limit } => {
+                    match manager.queue_semantic_backfill(limit).await {
+                        Ok(result) => {
+                            let result_json = serde_json::to_string(&result).unwrap_or_default();
+                            framed
+                                .send(DaemonMessage::SemanticBackfillQueued { result_json })
+                                .await?;
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::Error {
+                                    message: e.to_string(),
+                                })
+                                .await?;
+                        }
+                    }
+                }
+
+                ClientMessage::GetSemanticIndexStatus {
+                    embedding_model,
+                    dimensions,
+                } => {
+                    match manager
+                        .semantic_index_status(&embedding_model, dimensions)
+                        .await
+                    {
+                        Ok(status) => {
+                            let status_json = serde_json::to_string(&status).unwrap_or_default();
+                            framed
+                                .send(DaemonMessage::SemanticIndexStatus { status_json })
+                                .await?;
+                        }
+                        Err(e) => {
+                            framed
+                                .send(DaemonMessage::Error {
+                                    message: e.to_string(),
                                 })
                                 .await?;
                         }

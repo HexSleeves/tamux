@@ -2046,6 +2046,10 @@ impl TuiModel {
                             }
                             _ => None,
                         },
+                        matches!(
+                            self.settings_picker_target,
+                            Some(SettingsPickerTarget::EmbeddingProvider)
+                        ),
                         &self.theme,
                     );
                 }

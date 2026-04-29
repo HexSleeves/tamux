@@ -6,6 +6,8 @@ import { useAgentStore, type AgentMessage, type AgentThread } from "@/lib/agentS
 import { ThreadFilePreviewOverlay } from "./ThreadFilePreviewOverlay";
 import { buildThreadFilterTabs, dateFilters, filterThreads, type DateFilterId, type ThreadFilterTab } from "./threadFilterModel";
 
+const THREAD_SCROLL_THRESHOLD_PX = 24;
+
 export function ThreadsRail() {
   const runtime = useAgentChatPanelRuntime();
   const subAgents = useAgentStore((state) => state.subAgents);
@@ -149,15 +151,26 @@ export function ThreadsView() {
     );
   }
 
+  const activeThread = runtime.activeThread;
   const sendCurrentInput = () => runtime.handleSend();
-  const loadOlderThreadMessages = async (event: UIEvent<HTMLDivElement>) => {
+  const handleThreadScroll = async (event: UIEvent<HTMLDivElement>) => {
     const scroller = event.currentTarget;
-    if (scroller.scrollTop > 24) return;
-    const previousHeight = scroller.scrollHeight;
-    const loaded = await runtime.loadOlderThreadMessages();
-    if (loaded) {
+    if (scroller.scrollTop <= THREAD_SCROLL_THRESHOLD_PX) {
+      const previousHeight = scroller.scrollHeight;
+      const previousTop = scroller.scrollTop;
+      const loaded = await runtime.loadOlderThreadMessages();
+      if (loaded) {
+        requestAnimationFrame(() => {
+          scroller.scrollTop = scroller.scrollHeight - previousHeight + previousTop;
+        });
+      }
+      return;
+    }
+
+    const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    if (distanceFromBottom <= THREAD_SCROLL_THRESHOLD_PX && runtime.trimThreadMessagesToLatestWindow(activeThread.id)) {
       requestAnimationFrame(() => {
-        scroller.scrollTop = scroller.scrollHeight - previousHeight;
+        runtime.messagesEndRef.current?.scrollIntoView({ block: "end" });
       });
     }
   };
@@ -169,7 +182,7 @@ export function ThreadsView() {
       />
       <ParticipantStrip thread={runtime.activeThread} />
 
-      <div className="zorai-thread-chat-scroll" onScroll={(event) => void loadOlderThreadMessages(event)}>
+      <div className="zorai-thread-chat-scroll" onScroll={(event) => void handleThreadScroll(event)}>
         {runtime.messages.length === 0 ? (
           <div className="zorai-thread-empty-state">
             <div className="zorai-brand-mark"><span>Z</span></div>

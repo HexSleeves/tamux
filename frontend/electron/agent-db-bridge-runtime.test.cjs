@@ -54,12 +54,21 @@ function createFakeBridgeProcess() {
   };
 }
 
-function createRuntimeHarness() {
+function createRuntimeHarness(options = {}) {
   const spawned = [];
+  const sentEvents = [];
+  const mainWindow = options.mainWindow ?? {
+    isDestroyed: () => false,
+    webContents: {
+      send(channel, payload) {
+        sentEvents.push({ channel, payload });
+      },
+    },
+  };
   const runtime = createAgentDbBridgeRuntime({
     fs: { existsSync: () => true },
     getDaemonPath: () => path.join("/tmp", "zorai-daemon"),
-    getMainWindow: () => null,
+    getMainWindow: () => mainWindow,
     logToFile: () => {},
     pendingHandlerMatchesResponseType,
     resolvePendingAgentQueryEvent,
@@ -73,7 +82,7 @@ function createRuntimeHarness() {
     },
   });
 
-  return { runtime, spawned };
+  return { runtime, spawned, sentEvents };
 }
 
 test("agent bridge rejects a concurrent query for the same response type", async () => {
@@ -117,4 +126,21 @@ test("db bridge error rejects the oldest pending request with the bridge message
   spawned[0].emitStdout(`${JSON.stringify({ type: "error", message: "db exploded" })}\n`);
 
   await assert.rejects(pendingQuery, /db exploded/);
+});
+
+test("agent bridge forwards only actionable concierge welcome events to renderer", () => {
+  const { runtime, spawned, sentEvents } = createRuntimeHarness();
+
+  runtime.sendAgentCommand({ type: "subscribe" });
+  assert.equal(spawned.length, 1);
+
+  spawned[0].emitStdout(`${JSON.stringify({ type: "concierge_welcome", content: "Draft", actions: [] })}\n`);
+  spawned[0].emitStdout(`${JSON.stringify({ type: "concierge_welcome", content: "Final", actions: [{ id: "start" }] })}\n`);
+
+  assert.deepEqual(sentEvents, [
+    {
+      channel: "agent-event",
+      payload: { type: "concierge_welcome", content: "Final", actions: [{ id: "start" }] },
+    },
+  ]);
 });

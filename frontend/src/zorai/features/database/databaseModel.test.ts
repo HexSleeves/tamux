@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDatabaseRowUpdates, getNextDatabaseSort, normalizeDatabasePageSize } from "./databaseModel";
+import { buildDatabaseRowUpdates, getLastDatabasePageOffset, getNextDatabaseSort, normalizeDatabasePageSize, sortDatabaseRowsForDisplay } from "./databaseModel";
 import type { DatabaseTablePage } from "./databaseTypes";
 
 const page: DatabaseTablePage = {
@@ -33,10 +33,37 @@ describe("databaseModel", () => {
     ]);
   });
 
+  it("serializes nullable numeric database drafts as null when cleared", () => {
+    const nullablePage: DatabaseTablePage = {
+      ...page,
+      columns: [
+        { name: "deleted_at", declaredType: "INTEGER", nullable: true, primaryKey: false, editable: true },
+      ],
+      rows: [
+        { rowid: 7, values: { deleted_at: 1775659246145 } },
+      ],
+    };
+
+    expect(buildDatabaseRowUpdates(nullablePage, { "7:deleted_at": "" })).toEqual([
+      { rowid: 7, values: { deleted_at: null } },
+    ]);
+    expect(buildDatabaseRowUpdates(nullablePage, { "7:deleted_at": "null" })).toEqual([
+      { rowid: 7, values: { deleted_at: null } },
+    ]);
+  });
+
   it("keeps pagination page size bounded with a 100 row default", () => {
     expect(normalizeDatabasePageSize(undefined)).toBe(100);
     expect(normalizeDatabasePageSize(0)).toBe(1);
     expect(normalizeDatabasePageSize(9999)).toBe(500);
+  });
+
+  it("calculates the offset for the last database page", () => {
+    expect(getLastDatabasePageOffset(0, 100)).toBe(0);
+    expect(getLastDatabasePageOffset(1, 100)).toBe(0);
+    expect(getLastDatabasePageOffset(100, 100)).toBe(0);
+    expect(getLastDatabasePageOffset(101, 100)).toBe(100);
+    expect(getLastDatabasePageOffset(250, 100)).toBe(200);
   });
 
   it("cycles column sorting from none to descending to ascending and back to none", () => {
@@ -53,5 +80,17 @@ describe("databaseModel", () => {
       column: "created_at",
       direction: "desc",
     });
+  });
+
+  it("sorts visible rows as a renderer fallback when backend rows arrive unsorted", () => {
+    expect(sortDatabaseRowsForDisplay(page, { column: "role", direction: "asc" }).map((row) => row.values.role)).toEqual([
+      "assistant",
+      "user",
+    ]);
+    expect(sortDatabaseRowsForDisplay(page, { column: "token_count", direction: "desc" }).map((row) => row.values.token_count)).toEqual([
+      24,
+      12,
+    ]);
+    expect(sortDatabaseRowsForDisplay(page, null)).toBe(page.rows);
   });
 });

@@ -49,7 +49,6 @@ pub struct WormIntegrityResult {
 pub struct HistoryStore {
     pub(crate) conn: tokio_rusqlite::Connection,
     pub(crate) read_conn: tokio_rusqlite::Connection,
-    pub(crate) search_index: Option<search_index::SearchIndex>,
     skill_dir: PathBuf,
     telemetry_dir: PathBuf,
     worm_dir: PathBuf,
@@ -996,6 +995,8 @@ mod core;
 mod critique;
 mod debate;
 mod dream_state;
+mod embedding_queue;
+pub use embedding_queue::{SemanticBackfillResult, SemanticIndexStatus};
 mod event_log;
 mod event_triggers;
 mod external_runtime_profiles;
@@ -1019,10 +1020,11 @@ mod schema_helpers;
 mod schema_migrations;
 mod schema_sql;
 mod schema_sql_extra;
-pub(crate) mod search_index;
 mod skill_generation;
 mod statistics;
 mod temporal_foresight;
+#[cfg(feature = "lancedb-vector")]
+pub(crate) mod vector_index;
 pub(crate) use skill_generation::page_skill_variants;
 mod skill_metadata;
 pub(crate) use skill_metadata::{derive_skill_metadata, DerivedSkillMetadata};

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { buildDatabaseRowUpdates, databaseDraftKey, displayDatabaseValue, getNextDatabaseSort, isBlobPlaceholder, normalizeDatabasePageSize } from "./databaseModel";
+import { buildDatabaseRowUpdates, databaseDraftKey, displayDatabaseValue, getLastDatabasePageOffset, getNextDatabaseSort, isBlobPlaceholder, normalizeDatabasePageSize, sortDatabaseRowsForDisplay } from "./databaseModel";
 import { listDatabaseTables, queryDatabaseRows, updateDatabaseRows } from "./databaseBridge";
 import type { DatabaseSortState, DatabaseTablePage, DatabaseTableSummary } from "./databaseTypes";
 
@@ -96,9 +96,30 @@ export function DatabaseView({ activeTable }: DatabaseViewProps) {
   }, [activeTable, offset, pageSize, sort]);
 
   const updates = useMemo(() => buildDatabaseRowUpdates(page, drafts), [page, drafts]);
+  const displayRows = useMemo(() => sortDatabaseRowsForDisplay(page, sort), [page, sort]);
+  const displayColumns = page?.columns ?? [];
+  const tableEditable = page?.editable ?? false;
   const dirtyCount = updates.reduce((total, update) => total + Object.keys(update.values).length, 0);
   const canGoPrevious = offset > 0;
   const canGoNext = page ? offset + page.limit < page.totalRows : false;
+  const lastOffset = page ? getLastDatabasePageOffset(page.totalRows, pageSize) : 0;
+
+  const refreshVisibleRows = async () => {
+    if (!activeTable) return;
+    setLoading(true);
+    setStatus(null);
+    setDrafts({});
+    try {
+      const nextPage = await queryDatabaseRows(activeTable, offset, pageSize, sort);
+      setPage(nextPage);
+      setStatus("Refreshed visible rows.");
+    } catch (error: any) {
+      setPage(null);
+      setStatus(error?.message || "Refresh failed.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const pushChanges = async () => {
     if (!activeTable || updates.length === 0) return;
@@ -132,9 +153,12 @@ export function DatabaseView({ activeTable }: DatabaseViewProps) {
           <button type="button" className="zorai-primary-button" onClick={pushChanges} disabled={loading || dirtyCount === 0}>
             Push{dirtyCount > 0 ? ` ${dirtyCount}` : ""}
           </button>
+          <button type="button" className="zorai-ghost-button" disabled={loading || !page} onClick={refreshVisibleRows}>Refresh</button>
+          <button type="button" className="zorai-ghost-button" disabled={!canGoPrevious || loading} onClick={() => setOffset(0)}>First</button>
           <button type="button" className="zorai-ghost-button" disabled={!canGoPrevious || loading} onClick={() => setOffset(Math.max(0, offset - pageSize))}>Prev</button>
           <span>{page ? `${offset + 1}-${Math.min(offset + page.limit, page.totalRows)} / ${page.totalRows}` : "0 / 0"}</span>
           <button type="button" className="zorai-ghost-button" disabled={!canGoNext || loading} onClick={() => setOffset(offset + pageSize)}>Next</button>
+          <button type="button" className="zorai-ghost-button" disabled={loading || !page || offset === lastOffset} onClick={() => setOffset(lastOffset)}>Last</button>
           <label>
             <span>Rows</span>
             <input
@@ -158,7 +182,7 @@ export function DatabaseView({ activeTable }: DatabaseViewProps) {
           <thead>
             <tr>
               <th>rowid</th>
-              {page?.columns.map((column) => (
+              {displayColumns.map((column) => (
                 <th key={column.name}>
                   <button
                     type="button"
@@ -181,23 +205,24 @@ export function DatabaseView({ activeTable }: DatabaseViewProps) {
             </tr>
           </thead>
           <tbody>
-            {page?.rows.map((row, rowIndex) => (
+            {displayRows.map((row, rowIndex) => (
               <tr key={row.rowid ?? rowIndex}>
                 <td className="zorai-database-rowid">{row.rowid ?? "-"}</td>
-                {page.columns.map((column) => {
+                {displayColumns.map((column) => {
                   const originalValue = row.values[column.name];
-                  const editable = page.editable && typeof row.rowid === "number" && column.editable && !isBlobPlaceholder(originalValue);
+                  const editable = tableEditable && typeof row.rowid === "number" && column.editable && !isBlobPlaceholder(originalValue);
                   const key = typeof row.rowid === "number" ? databaseDraftKey(row.rowid, column.name) : `${rowIndex}:${column.name}`;
                   const isDirty = Object.prototype.hasOwnProperty.call(drafts, key);
                   const value = isDirty ? drafts[key] : displayDatabaseValue(originalValue);
                   return (
-                    <td key={column.name} className={isDirty ? "zorai-database-cell--dirty" : ""}>
-                      <input
-                        value={value}
-                        disabled={!editable || loading}
-                        onChange={(event) => setDrafts((current) => ({ ...current, [key]: event.target.value }))}
-                      />
-                    </td>
+                    <DatabaseCellEditor
+                      key={column.name}
+                      editable={editable}
+                      loading={loading}
+                      isDirty={isDirty}
+                      value={value}
+                      onChange={(nextValue) => setDrafts((current) => ({ ...current, [key]: nextValue }))}
+                    />
                   );
                 })}
               </tr>
@@ -208,5 +233,28 @@ export function DatabaseView({ activeTable }: DatabaseViewProps) {
         {loading ? <div className="zorai-empty">Loading database rows...</div> : null}
       </div>
     </section>
+  );
+}
+
+type DatabaseCellEditorProps = {
+  editable: boolean;
+  loading: boolean;
+  isDirty: boolean;
+  value: string;
+  onChange: (value: string) => void;
+};
+
+export function DatabaseCellEditor({ editable, loading, isDirty, value, onChange }: DatabaseCellEditorProps) {
+  return (
+    <td className={isDirty ? "zorai-database-cell--dirty" : ""}>
+      <textarea
+        className="zorai-database-cell-editor"
+        value={value}
+        disabled={!editable || loading}
+        rows={2}
+        spellCheck={false}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </td>
   );
 }

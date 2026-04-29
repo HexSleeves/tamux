@@ -8,6 +8,12 @@ export function normalizeDatabasePageSize(value: number | undefined): number {
   return Math.min(MAX_DATABASE_PAGE_SIZE, Math.max(1, Math.trunc(value ?? DEFAULT_DATABASE_PAGE_SIZE)));
 }
 
+export function getLastDatabasePageOffset(totalRows: number, pageSize: number): number {
+  const normalizedPageSize = normalizeDatabasePageSize(pageSize);
+  if (totalRows <= normalizedPageSize) return 0;
+  return Math.floor((totalRows - 1) / normalizedPageSize) * normalizedPageSize;
+}
+
 export function databaseDraftKey(rowid: number, columnName: string): string {
   return `${rowid}:${columnName}`;
 }
@@ -16,6 +22,25 @@ export function getNextDatabaseSort(current: DatabaseSortState | null, column: s
   if (!current || current.column !== column) return { column, direction: "desc" };
   if (current.direction === "desc") return { column, direction: "asc" };
   return null;
+}
+
+export function sortDatabaseRowsForDisplay(page: DatabaseTablePage | null, sort: DatabaseSortState | null) {
+  if (!page || !sort) return page?.rows ?? [];
+  const directionMultiplier = sort.direction === "asc" ? 1 : -1;
+  return [...page.rows].sort((left, right) => {
+    const result = compareDatabaseValues(left.values[sort.column], right.values[sort.column]);
+    if (result !== 0) return result * directionMultiplier;
+    return (left.rowid ?? 0) - (right.rowid ?? 0);
+  });
+}
+
+function compareDatabaseValues(left: unknown, right: unknown): number {
+  if (left === right) return 0;
+  if (left === null || left === undefined) return -1;
+  if (right === null || right === undefined) return 1;
+  if (typeof left === "number" && typeof right === "number") return left - right;
+  if (typeof left === "boolean" && typeof right === "boolean") return Number(left) - Number(right);
+  return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" });
 }
 
 export function displayDatabaseValue(value: unknown): string {
@@ -34,16 +59,17 @@ export function isBlobPlaceholder(value: unknown): value is { type: "blob"; byte
   );
 }
 
-export function parseDatabaseDraftValue(originalValue: unknown, draftValue: string): unknown {
-  if (originalValue === null) return draftValue.trim() === "" ? null : draftValue;
+export function parseDatabaseDraftValue(originalValue: unknown, draftValue: string, nullable = false): unknown {
+  const normalizedDraft = draftValue.trim().toLowerCase();
+  if (nullable && (normalizedDraft === "" || normalizedDraft === "null")) return null;
+  if (originalValue === null) return normalizedDraft === "" ? null : draftValue;
   if (typeof originalValue === "number") {
     const next = Number(draftValue);
     return Number.isFinite(next) ? next : draftValue;
   }
   if (typeof originalValue === "boolean") {
-    const normalized = draftValue.trim().toLowerCase();
-    if (normalized === "true" || normalized === "1") return true;
-    if (normalized === "false" || normalized === "0") return false;
+    if (normalizedDraft === "true" || normalizedDraft === "1") return true;
+    if (normalizedDraft === "false" || normalizedDraft === "0") return false;
   }
   return draftValue;
 }
@@ -62,7 +88,7 @@ export function buildDatabaseRowUpdates(
       if (isBlobPlaceholder(originalValue)) continue;
       const key = databaseDraftKey(row.rowid, column.name);
       if (!Object.prototype.hasOwnProperty.call(drafts, key)) continue;
-      const parsedValue = parseDatabaseDraftValue(originalValue, drafts[key]);
+      const parsedValue = parseDatabaseDraftValue(originalValue, drafts[key], column.nullable);
       if (JSON.stringify(parsedValue) === JSON.stringify(originalValue)) continue;
       const rowUpdate = updatesByRow.get(row.rowid) ?? {};
       rowUpdate[column.name] = parsedValue;

@@ -125,6 +125,8 @@ enum SettingsPickerTarget {
     AudioTtsModel,
     ImageGenerationProvider,
     ImageGenerationModel,
+    EmbeddingProvider,
+    EmbeddingModel,
     BuiltinPersonaProvider,
     BuiltinPersonaModel,
     CompactionWelesProvider,

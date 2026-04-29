@@ -762,22 +762,9 @@ async fn execute_skill_discovery_backend(
             return Ok((fallback, "legacy", true));
         }
 
-        let result = super::skill_mesh::retrieval::discover_local_skills_via_mesh(
-            history,
-            skills_root,
-            query,
-            context_tags,
-            limit,
-            cfg,
-        )
-        .await?;
-        if result.recommendations.is_empty()
-            || matches!(
-                result.confidence,
-                super::skill_recommendation::SkillRecommendationConfidence::None
-            )
+        #[cfg(not(feature = "lancedb-vector"))]
         {
-            let fallback = super::skill_recommendation::discover_local_skills(
+            let mut fallback = super::skill_recommendation::discover_local_skills(
                 history,
                 skills_root,
                 query,
@@ -786,16 +773,47 @@ async fn execute_skill_discovery_backend(
                 cfg,
             )
             .await?;
-            if !fallback.recommendations.is_empty()
-                || !matches!(
-                    fallback.confidence,
+            annotate_mesh_degraded_fallback(&mut fallback);
+            return Ok((fallback, "legacy", true));
+        }
+
+        #[cfg(feature = "lancedb-vector")]
+        {
+            let result = super::skill_mesh::retrieval::discover_local_skills_via_mesh(
+                history,
+                skills_root,
+                query,
+                context_tags,
+                limit,
+                cfg,
+            )
+            .await?;
+            if result.recommendations.is_empty()
+                || matches!(
+                    result.confidence,
                     super::skill_recommendation::SkillRecommendationConfidence::None
                 )
             {
-                return Ok((fallback, "legacy", false));
+                let fallback = super::skill_recommendation::discover_local_skills(
+                    history,
+                    skills_root,
+                    query,
+                    context_tags,
+                    limit,
+                    cfg,
+                )
+                .await?;
+                if !fallback.recommendations.is_empty()
+                    || !matches!(
+                        fallback.confidence,
+                        super::skill_recommendation::SkillRecommendationConfidence::None
+                    )
+                {
+                    return Ok((fallback, "legacy", false));
+                }
             }
+            return Ok((result, "mesh", false));
         }
-        return Ok((result, "mesh", false));
     }
 
     let result = super::skill_recommendation::discover_local_skills(
@@ -1422,7 +1440,7 @@ fn build_latest_skill_discovery_state(
     query: &str,
     result: &super::skill_recommendation::SkillDiscoveryResult,
 ) -> LatestSkillDiscoveryState {
-    let decision = super::skill_mesh::retrieval::policy_decision_for_legacy_discovery(result);
+    let decision = policy_decision_for_legacy_discovery(result);
 
     LatestSkillDiscoveryState {
         query: query.to_string(),
@@ -1440,6 +1458,63 @@ fn build_latest_skill_discovery_state(
         skill_read_completed: false,
         compliant: false,
         updated_at: now_millis(),
+    }
+}
+
+fn policy_decision_for_legacy_discovery(
+    result: &super::skill_recommendation::SkillDiscoveryResult,
+) -> super::skill_mesh::types::SkillMeshPolicyDecision {
+    use super::skill_mesh::types::{
+        SkillMeshConfidenceBand, SkillMeshNextStep, SkillMeshPolicyDecision,
+    };
+
+    let top_recommendation = result.recommendations.first();
+    let recommended_skill = top_recommendation.map(|item| item.record.skill_name.clone());
+    let read_skill_identifier = top_recommendation.map(|item| item.record.variant_id.clone());
+
+    let confidence_band = match result.confidence {
+        super::skill_recommendation::SkillRecommendationConfidence::Strong => {
+            SkillMeshConfidenceBand::Strong
+        }
+        super::skill_recommendation::SkillRecommendationConfidence::Weak => {
+            SkillMeshConfidenceBand::Weak
+        }
+        super::skill_recommendation::SkillRecommendationConfidence::None => {
+            SkillMeshConfidenceBand::None
+        }
+    };
+
+    match confidence_band {
+        SkillMeshConfidenceBand::Strong => SkillMeshPolicyDecision {
+            confidence_band,
+            next_step: SkillMeshNextStep::ReadSkill,
+            recommended_action: recommended_skill
+                .as_deref()
+                .map(|skill| format!("read_skill {skill}"))
+                .unwrap_or_else(|| SkillMeshNextStep::JustifySkillSkip.as_str().to_string()),
+            recommended_skill,
+            read_skill_identifier,
+            requires_approval: false,
+        },
+        SkillMeshConfidenceBand::Weak => SkillMeshPolicyDecision {
+            confidence_band,
+            next_step: SkillMeshNextStep::ChooseOrBypass,
+            recommended_action: recommended_skill
+                .as_deref()
+                .map(|skill| format!("read_skill {skill}"))
+                .unwrap_or_else(|| SkillMeshNextStep::JustifySkillSkip.as_str().to_string()),
+            recommended_skill,
+            read_skill_identifier,
+            requires_approval: false,
+        },
+        SkillMeshConfidenceBand::None => SkillMeshPolicyDecision {
+            confidence_band,
+            next_step: SkillMeshNextStep::JustifySkillSkip,
+            recommended_action: SkillMeshNextStep::JustifySkillSkip.as_str().to_string(),
+            recommended_skill: None,
+            read_skill_identifier: None,
+            requires_approval: false,
+        },
     }
 }
 

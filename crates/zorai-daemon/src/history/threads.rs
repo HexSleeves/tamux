@@ -7,90 +7,6 @@ fn now_millis_i64() -> i64 {
         .unwrap_or(0)
 }
 
-fn agent_message_search_document(message: &AgentDbMessage) -> super::search_index::SearchDocument {
-    let mut tags = vec![message.role.clone()];
-    if let Some(provider) = &message.provider {
-        tags.push(provider.clone());
-    }
-    if let Some(model) = &message.model {
-        tags.push(model.clone());
-    }
-    super::search_index::SearchDocument {
-        source_kind: super::search_index::SearchSourceKind::AgentMessage,
-        source_id: message.id.clone(),
-        title: format!("{} message", message.role),
-        body: [
-            message.content.as_str(),
-            message.reasoning.as_deref().unwrap_or_default(),
-            message.tool_calls_json.as_deref().unwrap_or_default(),
-            message.metadata_json.as_deref().unwrap_or_default(),
-        ]
-        .join("\n"),
-        tags,
-        workspace_id: None,
-        thread_id: Some(message.thread_id.clone()),
-        agent_id: None,
-        timestamp: message.created_at,
-        metadata_json: message.metadata_json.clone(),
-    }
-}
-
-fn index_agent_messages(store: &HistoryStore, messages: &[AgentDbMessage]) {
-    let documents = messages
-        .iter()
-        .map(agent_message_search_document)
-        .collect::<Vec<_>>();
-    store.upsert_search_documents_background(documents);
-}
-
-fn apply_agent_message_search_changes(
-    store: &HistoryStore,
-    upsert_messages: &[AgentDbMessage],
-    delete_message_ids: Vec<String>,
-) {
-    let documents = upsert_messages
-        .iter()
-        .map(agent_message_search_document)
-        .collect::<Vec<_>>();
-    store.apply_search_index_changes_background(
-        documents,
-        super::search_index::SearchSourceKind::AgentMessage,
-        delete_message_ids,
-    );
-}
-
-fn agent_message_needs_upsert(existing: &AgentDbMessage, incoming: &AgentDbMessage) -> bool {
-    existing.thread_id != incoming.thread_id
-        || existing.created_at != incoming.created_at
-        || existing.role != incoming.role
-        || existing.content != incoming.content
-        || existing.provider != incoming.provider
-        || existing.model != incoming.model
-        || existing.input_tokens != incoming.input_tokens
-        || existing.output_tokens != incoming.output_tokens
-        || existing.total_tokens != incoming.total_tokens
-        || existing.cost_usd != incoming.cost_usd
-        || existing.reasoning != incoming.reasoning
-        || existing.tool_calls_json != incoming.tool_calls_json
-        || existing.metadata_json != incoming.metadata_json
-}
-
-fn messages_requiring_search_reindex(
-    existing_messages: &std::collections::HashMap<String, AgentDbMessage>,
-    messages: &[AgentDbMessage],
-) -> Vec<AgentDbMessage> {
-    messages
-        .iter()
-        .filter(|message| {
-            existing_messages
-                .get(&message.id)
-                .map(|existing| agent_message_needs_upsert(existing, message))
-                .unwrap_or(true)
-        })
-        .cloned()
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,19 +31,8 @@ mod tests {
     }
 
     #[test]
-    fn messages_requiring_search_reindex_ignores_unchanged_messages() {
-        let existing = [message("m1", "unchanged")]
-            .into_iter()
-            .map(|message| (message.id.clone(), message))
-            .collect::<std::collections::HashMap<_, _>>();
-        let incoming = vec![message("m1", "unchanged"), message("m2", "new")];
-
-        let changed_ids = messages_requiring_search_reindex(&existing, &incoming)
-            .into_iter()
-            .map(|message| message.id)
-            .collect::<Vec<_>>();
-
-        assert_eq!(changed_ids, vec!["m2"]);
+    fn message_fixture_sets_thread_id() {
+        assert_eq!(message("m1", "body").thread_id, "thread-1");
     }
 }
 
@@ -193,7 +98,7 @@ impl HistoryStore {
                             incoming_latest_created_at,
                             "skipping stale thread snapshot persistence"
                         );
-                        return Ok(Vec::new());
+                        return Ok(());
                     }
                 }
 
@@ -229,22 +134,7 @@ impl HistoryStore {
                     ],
                 )?;
 
-                let mut existing_stmt = transaction.prepare(
-                    "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
-                     FROM agent_messages WHERE thread_id = ?1 AND deleted_at IS NULL",
-                )?;
-                let existing_rows = existing_stmt.query_map(params![&thread.id], map_agent_message)?;
-                let mut existing_messages =
-                    std::collections::HashMap::<String, AgentDbMessage>::new();
-                for row in existing_rows {
-                    let message = row?;
-                    existing_messages.insert(message.id.clone(), message);
-                }
-                drop(existing_stmt);
-
-                let changed_messages =
-                    messages_requiring_search_reindex(&existing_messages, &messages);
-                for message in &changed_messages {
+                for message in &messages {
                     transaction.execute(
                         "INSERT OR REPLACE INTO agent_messages \
                          (id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json, deleted_at) \
@@ -266,6 +156,12 @@ impl HistoryStore {
                             message.metadata_json,
                         ],
                     )?;
+                    embedding_queue::enqueue_message_embedding_job(
+                        &transaction,
+                        message,
+                        thread.workspace_id.as_deref(),
+                        now_ts() as i64,
+                    )?;
                 }
 
                 if messages.is_empty() {
@@ -284,13 +180,10 @@ impl HistoryStore {
                 }
 
                 transaction.commit()?;
-                Ok(changed_messages)
+                Ok(())
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))
-            .map(|changed_messages| {
-                index_agent_messages(self, &changed_messages);
-            })
     }
 
     pub async fn create_thread(&self, thread: &AgentDbThread) -> Result<()> {
@@ -380,7 +273,7 @@ impl HistoryStore {
                             incoming_latest_created_at,
                             "skipping stale thread snapshot replace"
                         );
-                        return Ok(None);
+                        return Ok(());
                     }
                 }
 
@@ -401,8 +294,6 @@ impl HistoryStore {
                     .iter()
                     .map(|message| message.id.clone())
                     .collect::<std::collections::HashSet<_>>();
-                let changed_messages =
-                    messages_requiring_search_reindex(&existing_messages, &messages);
                 let stale_ids = existing_messages
                     .keys()
                     .filter(|id| !incoming_ids.contains(*id))
@@ -456,6 +347,14 @@ impl HistoryStore {
                     let refs: Vec<&dyn rusqlite::types::ToSql> =
                         params.iter().map(|value| value.as_ref()).collect();
                     transaction.execute(&sql, refs.as_slice())?;
+                    for id in &stale_ids {
+                        embedding_queue::queue_embedding_deletion_on_connection(
+                            &transaction,
+                            "agent_message",
+                            id,
+                            now_ts() as i64,
+                        )?;
+                    }
                 }
 
                 for message in &messages {
@@ -480,6 +379,12 @@ impl HistoryStore {
                             message.metadata_json,
                         ],
                     )?;
+                    embedding_queue::enqueue_message_embedding_job(
+                        &transaction,
+                        message,
+                        thread.workspace_id.as_deref(),
+                        now_ts() as i64,
+                    )?;
                 }
 
                 if messages.is_empty() {
@@ -498,15 +403,10 @@ impl HistoryStore {
                 }
 
                 transaction.commit()?;
-                Ok(Some((changed_messages, stale_ids)))
+                Ok(())
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))
-            .map(|index_changes| {
-                if let Some((changed_messages, stale_ids)) = index_changes {
-                    apply_agent_message_search_changes(self, &changed_messages, stale_ids);
-                }
-            })
     }
 
     pub async fn delete_thread(&self, id: &str) -> Result<()> {
@@ -514,6 +414,21 @@ impl HistoryStore {
         self.conn
             .call(move |conn| {
                 let deleted_at = now_millis_i64();
+                let message_ids = {
+                    let mut stmt = conn.prepare(
+                        "SELECT id FROM agent_messages WHERE thread_id = ?1 AND deleted_at IS NULL",
+                    )?;
+                    let rows = stmt.query_map(params![id], |row| row.get::<_, String>(0))?;
+                    rows.collect::<std::result::Result<Vec<_>, _>>()?
+                };
+                for message_id in message_ids {
+                    embedding_queue::queue_embedding_deletion_on_connection(
+                        conn,
+                        "agent_message",
+                        &message_id,
+                        now_ts() as i64,
+                    )?;
+                }
                 conn.execute(
                     "UPDATE agent_threads SET deleted_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
                     params![id, deleted_at],
@@ -552,7 +467,6 @@ impl HistoryStore {
 
     pub async fn add_message(&self, message: &AgentDbMessage) -> Result<()> {
         let message = message.clone();
-        let search_document = agent_message_search_document(&message);
         self.conn.call(move |conn| {
         conn.execute(
             "INSERT OR REPLACE INTO agent_messages \
@@ -575,11 +489,23 @@ impl HistoryStore {
                 message.metadata_json,
             ],
         )?;
+        let workspace_id = conn
+            .query_row(
+                "SELECT workspace_id FROM agent_threads WHERE id = ?1",
+                params![message.thread_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        embedding_queue::enqueue_message_embedding_job(
+            conn,
+            &message,
+            workspace_id.as_deref(),
+            now_ts() as i64,
+        )?;
         refresh_thread_stats(conn, &message.thread_id)?;
         Ok(())
-        }).await.map_err(|e| anyhow::anyhow!("{e}"))?;
-        self.upsert_search_document(search_document);
-        Ok(())
+        }).await.map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub async fn update_message(&self, id: &str, patch: &AgentMessagePatch) -> Result<()> {
@@ -598,6 +524,7 @@ impl HistoryStore {
                 if thread_id.is_none() {
                     return Ok(());
                 }
+                let content_changed = patch.content.is_some();
 
                 conn.execute(
                     "UPDATE agent_messages SET
@@ -628,6 +555,32 @@ impl HistoryStore {
                 )?;
 
                 if let Some(thread_id) = thread_id {
+                    if content_changed {
+                        let message = conn
+                            .query_row(
+                                "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
+                                 FROM agent_messages WHERE id = ?1",
+                                params![&id],
+                                map_agent_message,
+                            )
+                            .optional()?;
+                        if let Some(message) = message {
+                            let workspace_id = conn
+                                .query_row(
+                                    "SELECT workspace_id FROM agent_threads WHERE id = ?1",
+                                    params![&thread_id],
+                                    |row| row.get::<_, Option<String>>(0),
+                                )
+                                .optional()?
+                                .flatten();
+                            embedding_queue::enqueue_message_embedding_job(
+                                conn,
+                                &message,
+                                workspace_id.as_deref(),
+                                now_ts() as i64,
+                            )?;
+                        }
+                    }
                     refresh_thread_stats(conn, &thread_id)?;
                 }
                 Ok(())
@@ -680,13 +633,20 @@ impl HistoryStore {
                 let update_refs: Vec<&dyn rusqlite::types::ToSql> =
                     update_params.iter().map(|p| p.as_ref()).collect();
                 conn.execute(&update_sql, update_refs.as_slice())?;
+                for id in &deleted_ids {
+                    embedding_queue::queue_embedding_deletion_on_connection(
+                        conn,
+                        "agent_message",
+                        id,
+                        now_ts() as i64,
+                    )?;
+                }
                 refresh_thread_stats(conn, &thread_id)?;
                 Ok(deleted_ids)
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let count = deleted_ids.len();
-        apply_agent_message_search_changes(self, &[], deleted_ids);
         Ok(count)
     }
 
@@ -727,13 +687,28 @@ impl HistoryStore {
                     placeholders.join(", ")
                 );
                 conn.execute(&update_sql, refs.as_slice())?;
+                let workspace_id = conn
+                    .query_row(
+                        "SELECT workspace_id FROM agent_threads WHERE id = ?1",
+                        params![&thread_id],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .optional()?
+                    .flatten();
+                for message in &restored_messages {
+                    embedding_queue::enqueue_message_embedding_job(
+                        conn,
+                        message,
+                        workspace_id.as_deref(),
+                        now_ts() as i64,
+                    )?;
+                }
                 refresh_thread_stats(conn, &thread_id)?;
                 Ok(restored_messages)
             })
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let count = restored_messages.len();
-        index_agent_messages(self, &restored_messages);
         Ok(count)
     }
 

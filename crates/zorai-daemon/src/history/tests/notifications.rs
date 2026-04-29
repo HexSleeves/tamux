@@ -118,10 +118,8 @@ async fn upsert_agent_event_preserves_notification_lifecycle_state() -> Result<(
 }
 
 #[tokio::test]
-async fn upsert_agent_event_does_not_wait_for_tantivy_writer() -> Result<()> {
+async fn upsert_agent_event_does_not_create_sidecar_lexical_index() -> Result<()> {
     let (store, root) = make_test_store().await?;
-    let raw_index = tantivy::Index::open_in_dir(root.join("search-index").join("tantivy"))?;
-    let _held_writer = raw_index.writer::<tantivy::schema::TantivyDocument>(50_000_000)?;
     let notification = sample_notification("notif_1", 100, None, None);
 
     let started = std::time::Instant::now();
@@ -133,7 +131,11 @@ async fn upsert_agent_event_does_not_wait_for_tantivy_writer() -> Result<()> {
 
     assert!(
         started.elapsed() < std::time::Duration::from_millis(150),
-        "notification upsert waited for the tantivy writer"
+        "notification upsert took longer than expected"
+    );
+    assert!(
+        !root.join("search-index").exists(),
+        "notification upsert should not create a sidecar lexical index"
     );
 
     fs::remove_dir_all(root)?;

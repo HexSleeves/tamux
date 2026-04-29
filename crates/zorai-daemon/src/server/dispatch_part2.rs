@@ -240,8 +240,8 @@ if matches!(
                 }
 
                 ClientMessage::SearchHistory { query, limit } => {
-                    match manager
-                        .search_history(&query, limit.unwrap_or(8).max(1))
+                    match agent
+                        .search_history_semantic_first(&query, limit.unwrap_or(8).max(1))
                         .await
                     {
                         Ok((summary, hits)) => {

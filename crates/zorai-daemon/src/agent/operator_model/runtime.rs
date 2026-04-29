@@ -992,6 +992,100 @@ impl AgentEngine {
         Ok(())
     }
 
+    pub(crate) async fn status_polling_diagnostics_snapshot(&self) -> serde_json::Value {
+        let sync_state = match super::operator_profile::user_sync::current_user_sync_state() {
+            super::operator_profile::user_sync::UserProfileSyncState::Clean => "clean",
+            super::operator_profile::user_sync::UserProfileSyncState::Dirty => "dirty",
+            super::operator_profile::user_sync::UserProfileSyncState::Reconciling => "reconciling",
+        };
+
+        let aline_summary = self.aline_startup_last_summary().await;
+        let aline_available = aline_summary
+            .as_ref()
+            .map(|summary| summary.aline_available)
+            .unwrap_or_else(|| self.aline_startup_is_available());
+        let watcher_state = aline_summary
+            .as_ref()
+            .and_then(|summary| {
+                if summary.watcher_started {
+                    Some("running")
+                } else {
+                    summary
+                        .watcher_initial_state
+                        .as_ref()
+                        .map(|state| match state {
+                            crate::agent::WatcherState::Running => "running",
+                            crate::agent::WatcherState::Stopped => "stopped",
+                            crate::agent::WatcherState::Unknown => "unknown",
+                        })
+                }
+            })
+            .unwrap_or("unknown");
+        let skill_mesh_backend = self
+            .config
+            .read()
+            .await
+            .skill_recommendation
+            .discovery_backend
+            .clone();
+        let skill_mesh_state = if skill_mesh_backend.eq_ignore_ascii_case("mesh") {
+            "fresh"
+        } else {
+            "legacy"
+        };
+        let active_skill_gate_state = self
+            .thread_skill_discovery_states
+            .read()
+            .await
+            .values()
+            .filter(|state| !state.compliant)
+            .max_by_key(|state| state.updated_at)
+            .cloned();
+        let active_skill_gate = if let Some(state) = active_skill_gate_state {
+            let capability_family = fallback_skill_gate_family(state.recommended_skill.as_deref());
+            serde_json::json!({
+                "recommended_skill": state.recommended_skill,
+                "recommended_action": state.recommended_action,
+                "requires_approval": state.mesh_requires_approval,
+                "skill_read_completed": state.skill_read_completed,
+                "mesh_next_step": state.mesh_next_step,
+                "rationale": cached_skill_gate_rationale(&state),
+                "capability_family": capability_family,
+            })
+            .into()
+        } else {
+            None
+        };
+
+        serde_json::json!({
+            "operator_profile_sync_state": sync_state,
+            "operator_profile_sync_dirty": sync_state != "clean",
+            "operator_profile_scheduler_fallback": false,
+            "aline": {
+                "available": aline_available,
+                "watcher_state": watcher_state,
+                "watcher_started": aline_summary.as_ref().map(|summary| summary.watcher_started).unwrap_or(false),
+                "discovered_count": aline_summary.as_ref().map(|summary| summary.discovered_count).unwrap_or(0),
+                "selected_count": aline_summary.as_ref().map(|summary| summary.selected_count).unwrap_or(0),
+                "imported_count": aline_summary.as_ref().map(|summary| summary.imported_count).unwrap_or(0),
+                "generated_count": aline_summary.as_ref().map(|summary| summary.generated_count).unwrap_or(0),
+                "skipped_recently_imported_count": aline_summary.as_ref().map(|summary| summary.skipped_recently_imported_count).unwrap_or(0),
+                "budget_exhausted": aline_summary.as_ref().map(|summary| summary.budget_exhausted).unwrap_or(false),
+                "failure_stage": aline_summary.as_ref().and_then(|summary| summary.failure_stage.clone()),
+                "failure_message": aline_summary.as_ref().and_then(|summary| summary.failure_message.clone()),
+                "short_circuit_reason": aline_summary
+                    .as_ref()
+                    .and_then(|summary| summary.short_circuit_reason.map(|reason| reason.as_str())),
+            },
+            "skill_mesh": {
+                "backend": skill_mesh_backend,
+                "state": skill_mesh_state,
+                "active_gate": active_skill_gate,
+            },
+        })
+    }
+
+    #[cfg(test)]
     pub(crate) async fn status_diagnostics_snapshot(&self) -> serde_json::Value {
         let sync_state = match super::operator_profile::user_sync::current_user_sync_state() {
             super::operator_profile::user_sync::UserProfileSyncState::Clean => "clean",

@@ -39,10 +39,13 @@
 }
 
 .zorai-database-surface {
+  height: 100%;
   min-height: 0;
+  min-width: 0;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   gap: 10px;
+  overflow: hidden;
   padding: 16px;
 }
 
@@ -87,7 +90,10 @@
 
 .zorai-database-table-wrap {
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
   overflow: auto;
+  scrollbar-gutter: stable both-edges;
   border: 1px solid var(--zorai-border);
   background: #070b11;
 }
@@ -162,8 +168,10 @@
   background: #0a0f17;
 }
 
-.zorai-database-table input {
+.zorai-database-cell-editor {
   width: 100%;
+  min-height: 44px;
+  max-height: 180px;
   min-width: 0;
   box-sizing: border-box;
   border: 0;
@@ -172,14 +180,18 @@
   color: var(--zorai-text);
   padding: 8px;
   font: inherit;
+  line-height: 1.35;
+  resize: vertical;
+  white-space: pre-wrap;
 }
 
-.zorai-database-table input:disabled {
+.zorai-database-cell-editor:disabled {
   color: var(--zorai-muted);
   cursor: default;
+  resize: none;
 }
 
-.zorai-database-cell--dirty input {
+.zorai-database-cell--dirty .zorai-database-cell-editor {
   background: rgba(119, 216, 197, 0.12);
   box-shadow: inset 0 0 0 1px rgba(119, 216, 197, 0.35);
 }

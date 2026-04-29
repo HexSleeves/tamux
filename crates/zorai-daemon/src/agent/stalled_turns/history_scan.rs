@@ -172,6 +172,12 @@ fn latest_stalled_turn_observation(
     tasks: &VecDeque<AgentTask>,
     goal_runs: &VecDeque<GoalRun>,
 ) -> Option<ThreadStallObservation> {
+    if terminal_work_owns_thread(thread.id.as_str(), tasks, goal_runs)
+        && !active_work_owns_thread(thread.id.as_str(), tasks, goal_runs)
+    {
+        return None;
+    }
+
     let last_message = thread.messages.last()?;
     if last_message.role != MessageRole::Assistant
         || last_message.tool_calls.is_some()
@@ -258,8 +264,55 @@ fn active_task_id_for_thread(thread_id: &str, tasks: &VecDeque<AgentTask>) -> Op
 fn goal_run_id_for_thread(thread_id: &str, goal_runs: &VecDeque<GoalRun>) -> Option<String> {
     goal_runs
         .iter()
-        .find(|goal_run| goal_run.thread_id.as_deref() == Some(thread_id))
+        .find(|goal_run| goal_run_matches_thread(goal_run, thread_id))
         .map(|goal_run| goal_run.id.clone())
+}
+
+fn active_work_owns_thread(
+    thread_id: &str,
+    tasks: &VecDeque<AgentTask>,
+    goal_runs: &VecDeque<GoalRun>,
+) -> bool {
+    tasks.iter().any(|task| {
+        task.thread_id.as_deref() == Some(thread_id)
+            && matches!(
+                task.status,
+                TaskStatus::InProgress | TaskStatus::Blocked | TaskStatus::AwaitingApproval
+            )
+    }) || goal_runs.iter().any(|goal_run| {
+        goal_run_matches_thread(goal_run, thread_id)
+            && !goal_run_status_is_terminal(goal_run.status)
+    })
+}
+
+fn terminal_work_owns_thread(
+    thread_id: &str,
+    tasks: &VecDeque<AgentTask>,
+    goal_runs: &VecDeque<GoalRun>,
+) -> bool {
+    tasks.iter().any(|task| {
+        task.thread_id.as_deref() == Some(thread_id)
+            && crate::agent::task_scheduler::is_task_terminal_status(task.status)
+    }) || goal_runs.iter().any(|goal_run| {
+        goal_run_matches_thread(goal_run, thread_id) && goal_run_status_is_terminal(goal_run.status)
+    })
+}
+
+fn goal_run_matches_thread(goal_run: &GoalRun, thread_id: &str) -> bool {
+    goal_run.thread_id.as_deref() == Some(thread_id)
+        || goal_run.root_thread_id.as_deref() == Some(thread_id)
+        || goal_run.active_thread_id.as_deref() == Some(thread_id)
+        || goal_run
+            .execution_thread_ids
+            .iter()
+            .any(|candidate| candidate == thread_id)
+}
+
+fn goal_run_status_is_terminal(status: GoalRunStatus) -> bool {
+    matches!(
+        status,
+        GoalRunStatus::Completed | GoalRunStatus::Failed | GoalRunStatus::Cancelled
+    )
 }
 
 fn goal_progressed_after(

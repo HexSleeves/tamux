@@ -196,6 +196,17 @@ describe("Zorai feature surfaces", () => {
     expect(css).not.toContain(".zorai-thread-surface > div");
   });
 
+  it("opens listed threads through the daemon detail loader", () => {
+    const source = readFeature("../../components/agent-chat-panel/runtime/layout.tsx");
+    const browserStart = source.indexOf("function AgentChatPanelThreadBrowserSurface");
+    const browserEnd = source.indexOf("export function AgentChatPanelThreadsSurface");
+    const browserSource = source.slice(browserStart, browserEnd);
+
+    expect(browserSource).toContain("openThread");
+    expect(browserSource).toContain("openThread(thread.id)");
+    expect(browserSource).not.toContain("setActiveThread(thread.id)");
+  });
+
   it("shows the streaming stop action next to Send in native Threads", () => {
     const source = readFeature("./threads/ThreadsView.tsx");
     const composerStart = source.indexOf("zorai-thread-composer__footer");

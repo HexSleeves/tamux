@@ -9011,7 +9011,6 @@ dependencies = [
  "sha2",
  "strip-ansi-escapes",
  "sysinfo",
- "tantivy",
  "tar",
  "tempfile",
  "thiserror 2.0.18",

@@ -149,6 +149,23 @@ impl SessionManager {
             .await
     }
 
+    pub async fn queue_semantic_backfill(
+        &self,
+        limit: Option<usize>,
+    ) -> Result<crate::history::SemanticBackfillResult> {
+        self.history.queue_semantic_backfill(limit).await
+    }
+
+    pub async fn semantic_index_status(
+        &self,
+        embedding_model: &str,
+        dimensions: u32,
+    ) -> Result<crate::history::SemanticIndexStatus> {
+        self.history
+            .semantic_index_status(embedding_model, dimensions)
+            .await
+    }
+
     pub fn find_symbol_matches(
         &self,
         workspace_root: &str,

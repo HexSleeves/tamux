@@ -32,41 +32,6 @@ fn write_skill(
     write_markdown(root, &format!("{skill_dir}/SKILL.md"), content)
 }
 
-fn count_tantivy_segment_terms(index_dir: &std::path::Path) -> Result<usize> {
-    let mut count = 0;
-    for entry in fs::read_dir(index_dir)? {
-        let entry = entry?;
-        if entry
-            .path()
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| value == "term")
-        {
-            count += 1;
-        }
-    }
-    Ok(count)
-}
-
-fn snapshot_index_file_metadata(
-    index_dir: &std::path::Path,
-) -> Result<Vec<(String, u64, Option<std::time::SystemTime>)>> {
-    let mut entries = Vec::new();
-    for entry in fs::read_dir(index_dir)? {
-        let entry = entry?;
-        let metadata = entry.metadata()?;
-        if metadata.is_file() {
-            entries.push((
-                entry.file_name().to_string_lossy().to_string(),
-                metadata.len(),
-                metadata.modified().ok(),
-            ));
-        }
-    }
-    entries.sort_by(|left, right| left.0.cmp(&right.0));
-    Ok(entries)
-}
-
 fn sample_task(id: &str, thread_id: &str) -> crate::agent::types::AgentTask {
     crate::agent::types::AgentTask {
         id: id.to_string(),
@@ -463,7 +428,7 @@ keywords: [summary, status, writing]
 }
 
 #[tokio::test]
-async fn discover_local_guidelines_indexes_guideline_documents_for_tantivy_search() -> Result<()> {
+async fn discover_local_guidelines_does_not_create_sidecar_lexical_index() -> Result<()> {
     let root = tempdir()?;
     let store = HistoryStore::new_test_store(root.path()).await?;
     let guidelines_root = root.path().join("guidelines");
@@ -497,84 +462,9 @@ Use systematic debugging before proposing fixes.
     )
     .await?;
 
-    let hits = store
-        .search_index
-        .as_ref()
-        .expect("test store should open tantivy search index")
-        .search(crate::history::search_index::SearchRequest {
-            query: "systematic debugging fixes".to_string(),
-            limit: 3,
-            source_kinds: vec![crate::history::search_index::SearchSourceKind::Guideline],
-            workspace_id: None,
-            thread_id: None,
-            agent_id: None,
-        })?;
-
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].source_id, "coding/debugging.md");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn discover_local_guidelines_does_not_rewrite_unchanged_tantivy_documents() -> Result<()> {
-    let root = tempdir()?;
-    let store = HistoryStore::new_test_store(root.path()).await?;
-    let guidelines_root = root.path().join("guidelines");
-    write_markdown(
-        &guidelines_root,
-        "coding/debugging.md",
-        r#"---
-name: debugging-task
-description: Use for debugging broken behavior.
-recommended_skills: [systematic-debugging]
----
-
-# Debugging Task
-
-Use systematic debugging before proposing fixes.
-"#,
-    )?;
-
-    let cfg = SkillRecommendationConfig {
-        strong_match_threshold: 0.2,
-        weak_match_threshold: 0.1,
-        ..SkillRecommendationConfig::default()
-    };
-    discover_local_guidelines(
-        &store,
-        &guidelines_root,
-        "systematic debugging fixes",
-        &[],
-        3,
-        &cfg,
-    )
-    .await?;
-
-    let index_dir = root.path().join("search-index").join("tantivy");
-    let segments_after_first_discovery = count_tantivy_segment_terms(&index_dir)?;
-    let file_metadata_after_first_discovery = snapshot_index_file_metadata(&index_dir)?;
-    std::thread::sleep(std::time::Duration::from_millis(20));
-
-    discover_local_guidelines(
-        &store,
-        &guidelines_root,
-        "systematic debugging fixes",
-        &[],
-        3,
-        &cfg,
-    )
-    .await?;
-
-    assert_eq!(
-        count_tantivy_segment_terms(&index_dir)?,
-        segments_after_first_discovery,
-        "unchanged guideline discovery should not create another tantivy segment"
-    );
-    assert_eq!(
-        snapshot_index_file_metadata(&index_dir)?,
-        file_metadata_after_first_discovery,
-        "unchanged guideline discovery should not rewrite tantivy index files"
+    assert!(
+        !root.path().join("search-index").exists(),
+        "guideline discovery should rank in memory and must not create a sidecar lexical index"
     );
 
     Ok(())

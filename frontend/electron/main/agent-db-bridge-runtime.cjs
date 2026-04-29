@@ -1,3 +1,8 @@
+function isActionableConciergeWelcomeEvent(event) {
+    return event?.type !== 'concierge_welcome'
+        || (Array.isArray(event.actions) && event.actions.length > 0);
+}
+
 function createAgentDbBridgeRuntime(options) {
     const {
         fs,
@@ -93,6 +98,10 @@ function createAgentDbBridgeRuntime(options) {
                             logToFile('warn', 'failed to restore daemon WhatsApp subscription', { error: error?.message || String(error) });
                         }
                     }
+                    continue;
+                }
+
+                if (!isActionableConciergeWelcomeEvent(event)) {
                     continue;
                 }
 
@@ -342,4 +351,4 @@ function createAgentDbBridgeRuntime(options) {
     };
 }
 
-module.exports = { createAgentDbBridgeRuntime };
+module.exports = { createAgentDbBridgeRuntime, isActionableConciergeWelcomeEvent };

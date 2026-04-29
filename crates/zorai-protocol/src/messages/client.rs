@@ -233,4 +233,6 @@ pub enum ClientMessage {
     ListDatabaseTables,
     QueryDatabaseRows { table_name: String, offset: usize, limit: usize, #[serde(default)] sort_column: Option<String>, #[serde(default)] sort_direction: Option<String> },
     UpdateDatabaseRows { table_name: String, updates_json: String },
+    QueueSemanticBackfill { #[serde(default)] limit: Option<usize> },
+    GetSemanticIndexStatus { embedding_model: String, dimensions: u32 },
 }

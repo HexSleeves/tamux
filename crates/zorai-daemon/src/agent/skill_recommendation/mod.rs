@@ -9,9 +9,7 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use ranking::rank_skill_candidates;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
 use types::{GraphSkillSignal, SkillCandidateInput};
 
 pub(crate) use metadata::extract_skill_metadata;
@@ -23,7 +21,6 @@ pub(crate) use types::{
 const MAX_SKILL_EXCERPT_LINES: usize = 40;
 const MAX_SKILL_EXCERPT_CHARS: usize = 2400;
 const DISCOVERY_CURSOR_PREFIX: &str = "skill-discovery:";
-static GUIDELINE_INDEX_FINGERPRINTS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
 
 pub(crate) async fn discover_local_skills(
     history: &HistoryStore,
@@ -60,7 +57,7 @@ pub(crate) async fn discover_local_skills(
 }
 
 pub(crate) async fn discover_local_guidelines(
-    history: &HistoryStore,
+    _history: &HistoryStore,
     guidelines_root: &Path,
     query: &str,
     workspace_tags: &[String],
@@ -68,10 +65,9 @@ pub(crate) async fn discover_local_guidelines(
     cfg: &SkillRecommendationConfig,
 ) -> Result<SkillDiscoveryResult> {
     let candidates = collect_filesystem_guideline_candidates(guidelines_root)?;
-    index_guideline_candidates(history, guidelines_root, &candidates);
     let graph_signals = HashMap::new();
 
-    let mut result = rank_skill_candidates(
+    let result = rank_skill_candidates(
         candidates,
         query,
         workspace_tags,
@@ -79,7 +75,6 @@ pub(crate) async fn discover_local_guidelines(
         limit,
         cfg,
     );
-    apply_tantivy_guideline_order(history, query, &mut result);
     Ok(result)
 }
 
@@ -495,151 +490,6 @@ fn read_recommendation_document(path: &Path, document_kind: &str) -> Result<Opti
             )
         }),
     }
-}
-
-fn index_guideline_candidates(
-    history: &HistoryStore,
-    guidelines_root: &Path,
-    candidates: &[SkillCandidateInput],
-) {
-    let Some(index) = history.search_index.as_ref() else {
-        return;
-    };
-    let cache_key = guideline_index_cache_key(guidelines_root);
-    let fingerprint = guideline_candidates_fingerprint(candidates);
-    if guideline_index_cache_contains(&cache_key, fingerprint) {
-        return;
-    }
-
-    let documents = candidates
-        .iter()
-        .map(|candidate| {
-            let mut tags = candidate.record.context_tags.clone();
-            tags.extend(candidate.metadata.keywords.iter().cloned());
-            tags.extend(candidate.metadata.triggers.iter().cloned());
-            crate::history::search_index::SearchDocument {
-                source_kind: crate::history::search_index::SearchSourceKind::Guideline,
-                source_id: candidate.record.relative_path.clone(),
-                title: candidate.record.skill_name.clone(),
-                body: format!("{}\n{}", candidate.metadata.search_text, candidate.excerpt),
-                tags,
-                workspace_id: None,
-                thread_id: None,
-                agent_id: None,
-                timestamp: candidate.record.updated_at as i64,
-                metadata_json: serde_json::to_string(&serde_json::json!({
-                    "variant_id": candidate.record.variant_id,
-                    "variant_name": candidate.record.variant_name,
-                    "recommended_action": format!("read_guideline {}", candidate.record.relative_path),
-                }))
-                .ok(),
-            }
-        })
-        .collect::<Vec<_>>();
-
-    if let Err(error) = index.upsert_many(documents) {
-        tracing::warn!(%error, "failed to synchronously index guideline candidates");
-    } else {
-        record_guideline_index_fingerprint(cache_key, fingerprint);
-    }
-}
-
-fn guideline_index_cache_key(guidelines_root: &Path) -> String {
-    std::fs::canonicalize(guidelines_root)
-        .unwrap_or_else(|_| guidelines_root.to_path_buf())
-        .to_string_lossy()
-        .to_string()
-}
-
-fn guideline_candidates_fingerprint(candidates: &[SkillCandidateInput]) -> u64 {
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    let mut candidate_keys = candidates
-        .iter()
-        .map(|candidate| {
-            let mut tags = candidate.record.context_tags.clone();
-            tags.sort();
-            let mut keywords = candidate.metadata.keywords.clone();
-            keywords.sort();
-            let mut triggers = candidate.metadata.triggers.clone();
-            triggers.sort();
-            (
-                candidate.record.relative_path.clone(),
-                candidate.record.skill_name.clone(),
-                candidate.record.variant_name.clone(),
-                candidate.metadata.search_text.clone(),
-                candidate.excerpt.clone(),
-                tags,
-                keywords,
-                triggers,
-            )
-        })
-        .collect::<Vec<_>>();
-    candidate_keys.sort_by(|left, right| left.0.cmp(&right.0));
-    candidate_keys.hash(&mut hasher);
-    hasher.finish()
-}
-
-fn guideline_index_cache_contains(cache_key: &str, fingerprint: u64) -> bool {
-    let cache = GUIDELINE_INDEX_FINGERPRINTS.get_or_init(|| Mutex::new(HashMap::new()));
-    cache
-        .lock()
-        .map(|cache| cache.get(cache_key).copied() == Some(fingerprint))
-        .unwrap_or(false)
-}
-
-fn record_guideline_index_fingerprint(cache_key: String, fingerprint: u64) {
-    let cache = GUIDELINE_INDEX_FINGERPRINTS.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Ok(mut cache) = cache.lock() {
-        cache.insert(cache_key, fingerprint);
-    }
-}
-
-fn apply_tantivy_guideline_order(
-    history: &HistoryStore,
-    query: &str,
-    result: &mut SkillDiscoveryResult,
-) {
-    if result.recommendations.len() < 2 {
-        return;
-    }
-    let Some(index) = &history.search_index else {
-        return;
-    };
-    let Ok(hits) = index.search(crate::history::search_index::SearchRequest {
-        query: query.to_string(),
-        limit: result.recommendations.len(),
-        source_kinds: vec![crate::history::search_index::SearchSourceKind::Guideline],
-        workspace_id: None,
-        thread_id: None,
-        agent_id: None,
-    }) else {
-        return;
-    };
-
-    let hit_order = hits
-        .into_iter()
-        .enumerate()
-        .map(|(idx, hit)| (hit.source_id, idx))
-        .collect::<HashMap<_, _>>();
-    result.recommendations.sort_by(|left, right| {
-        let left_rank = hit_order
-            .get(&left.record.relative_path)
-            .copied()
-            .unwrap_or(usize::MAX);
-        let right_rank = hit_order
-            .get(&right.record.relative_path)
-            .copied()
-            .unwrap_or(usize::MAX);
-        left_rank
-            .cmp(&right_rank)
-            .then_with(|| {
-                right
-                    .score
-                    .partial_cmp(&left.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .then_with(|| left.record.relative_path.cmp(&right.record.relative_path))
-    });
 }
 
 fn synthetic_skill_variant_record(

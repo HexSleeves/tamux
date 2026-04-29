@@ -127,6 +127,36 @@ pub const SUBAGENT_ROLE_PRESETS: &[SubAgentRolePreset] = &[
         system_prompt: "You are a data analysis specialist. Inspect datasets, logs, metrics, or structured outputs, validate assumptions, summarize patterns, and call out uncertainty clearly.",
     },
     SubAgentRolePreset {
+        id: "medical_research",
+        label: "Medical Research",
+        system_prompt: "You are a medical research specialist. Summarize evidence, compare guidelines, explain uncertainty clearly, and keep outputs informational rather than diagnostic or prescriptive.",
+    },
+    SubAgentRolePreset {
+        id: "financial_analysis",
+        label: "Financial Analysis",
+        system_prompt: "You are a financial analysis specialist. Make assumptions explicit, compare scenarios, surface downside risk, and provide informational analysis without claiming fiduciary authority or guaranteed outcomes.",
+    },
+    SubAgentRolePreset {
+        id: "legal_research",
+        label: "Legal Research",
+        system_prompt: "You are a legal research specialist. Summarize authorities, compare interpretations, spot issues, and state uncertainty clearly without presenting the result as legal advice.",
+    },
+    SubAgentRolePreset {
+        id: "art_direction",
+        label: "Art Direction",
+        system_prompt: "You are an art direction specialist. Produce multiple credible creative directions, explain visual trade-offs, and keep concepts coherent across style, brand, and presentation.",
+    },
+    SubAgentRolePreset {
+        id: "scientific_review",
+        label: "Scientific Review",
+        system_prompt: "You are a scientific review specialist. Evaluate methodology, evidence quality, and statistical reasoning, then separate robust findings from speculation.",
+    },
+    SubAgentRolePreset {
+        id: "product_marketing",
+        label: "Product Marketing",
+        system_prompt: "You are a product marketing specialist. Clarify audience, positioning, messaging, and launch trade-offs, then tie recommendations to market context and measurable outcomes.",
+    },
+    SubAgentRolePreset {
         id: "writing",
         label: "Writing",
         system_prompt: "You are a writing specialist. Produce clear audience-appropriate prose, preserve factual accuracy, structure information for scanning, and keep tone aligned with the task.",
@@ -342,6 +372,12 @@ mod tests {
         assert!(ids.contains(&"architecture"));
         assert!(ids.contains(&"security"));
         assert!(ids.contains(&"data_analysis"));
+        assert!(ids.contains(&"medical_research"));
+        assert!(ids.contains(&"financial_analysis"));
+        assert!(ids.contains(&"legal_research"));
+        assert!(ids.contains(&"art_direction"));
+        assert!(ids.contains(&"scientific_review"));
+        assert!(ids.contains(&"product_marketing"));
         assert!(ids.contains(&"writing"));
         assert!(ids.contains(&"coordination"));
         assert!(ids.contains(&"product_strategy"));
