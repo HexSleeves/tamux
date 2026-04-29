@@ -128,10 +128,7 @@ fn rebuild_offloaded_payloads_table(
     }
 
     drop(insert_stmt);
-    transaction.execute_batch(&format!(
-        "DROP TABLE offloaded_payloads_legacy;
-         {OFFLOADED_PAYLOADS_INDEX_SQL};"
-    ))?;
+    transaction.execute_batch(OFFLOADED_PAYLOADS_INDEX_SQL)?;
     transaction.commit()
 }
 
@@ -394,7 +391,7 @@ pub(super) fn apply_schema_migrations(
             actual_action TEXT,
             was_accepted INTEGER,
             accuracy_score REAL,
-            FOREIGN KEY (pattern_id) REFERENCES temporal_patterns(id) ON DELETE CASCADE
+            FOREIGN KEY (pattern_id) REFERENCES temporal_patterns(id)
         );
         CREATE INDEX IF NOT EXISTS idx_temporal_predictions_pattern_predicted ON temporal_predictions(pattern_id, predicted_at_ms DESC);",
     )?;
@@ -407,7 +404,7 @@ pub(super) fn apply_schema_migrations(
             started_at_ms INTEGER NOT NULL,
             completed_at_ms INTEGER,
             was_used INTEGER,
-            FOREIGN KEY (prediction_id) REFERENCES temporal_predictions(id) ON DELETE CASCADE
+            FOREIGN KEY (prediction_id) REFERENCES temporal_predictions(id)
         );
         CREATE INDEX IF NOT EXISTS idx_precomputation_log_prediction_started ON precomputation_log(prediction_id, started_at_ms DESC);",
     )?;
@@ -437,7 +434,7 @@ pub(super) fn apply_schema_migrations(
             score REAL NOT NULL,
             threshold_met INTEGER NOT NULL,
             created_at_ms INTEGER NOT NULL,
-            FOREIGN KEY (dream_cycle_id) REFERENCES dream_cycles(id) ON DELETE CASCADE
+            FOREIGN KEY (dream_cycle_id) REFERENCES dream_cycles(id)
         );
         CREATE INDEX IF NOT EXISTS idx_counterfactual_evaluations_cycle ON counterfactual_evaluations(dream_cycle_id, created_at_ms DESC);",
     )?;
@@ -522,7 +519,13 @@ pub(super) fn apply_schema_migrations(
         "UPDATE skill_variants SET fitness_score = CAST(success_count AS REAL) - CAST(failure_count AS REAL) WHERE fitness_score = 0",
         [],
     )?;
+    ensure_column(connection, "agent_threads", "deleted_at", "INTEGER")?;
     ensure_column(connection, "agent_messages", "cost_usd", "REAL")?;
+    ensure_column(connection, "agent_messages", "deleted_at", "INTEGER")?;
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_thread_deleted_created ON agent_messages(thread_id, deleted_at, created_at, id)",
+        [],
+    )?;
     ensure_column(connection, "agent_tasks", "scheduled_at", "INTEGER")?;
     ensure_column(connection, "agent_tasks", "goal_run_id", "TEXT")?;
     ensure_column(connection, "agent_tasks", "goal_run_title", "TEXT")?;
@@ -553,6 +556,40 @@ pub(super) fn apply_schema_migrations(
     ensure_column(connection, "agent_tasks", "success_criteria", "TEXT")?;
     ensure_column(connection, "agent_tasks", "max_duration_secs", "INTEGER")?;
     ensure_column(connection, "agent_tasks", "supervisor_config_json", "TEXT")?;
+    ensure_column(connection, "agent_tasks", "deleted_at", "INTEGER")?;
+    ensure_column(
+        connection,
+        "agent_task_dependencies",
+        "deleted_at",
+        "INTEGER",
+    )?;
+    ensure_column(connection, "agent_task_logs", "deleted_at", "INTEGER")?;
+    ensure_column(connection, "agent_config_items", "deleted_at", "INTEGER")?;
+    ensure_column(connection, "provider_auth_state", "deleted_at", "INTEGER")?;
+    ensure_column(connection, "plugins", "deleted_at", "INTEGER")?;
+    ensure_column(connection, "plugin_settings", "deleted_at", "INTEGER")?;
+    ensure_column(connection, "plugin_credentials", "deleted_at", "INTEGER")?;
+    for table in [
+        "command_log",
+        "snapshot_index",
+        "agent_checkpoints",
+        "gateway_threads",
+        "gateway_channel_modes",
+        "whatsapp_provider_state",
+        "operator_profile_sessions",
+        "action_audit",
+        "memory_tombstones",
+        "consolidation_state",
+        "offloaded_payloads",
+        "thread_structural_memory",
+        "routine_definitions",
+        "memory_cluster_members",
+        "cognitive_biases",
+        "workflow_profiles",
+        "protocol_steps",
+    ] {
+        ensure_column(connection, table, "deleted_at", "INTEGER")?;
+    }
     ensure_column(
         connection,
         "memory_distillation_log",
@@ -646,8 +683,11 @@ pub(super) fn apply_schema_migrations(
         "execution_thread_ids_json",
         "TEXT NOT NULL DEFAULT '[]'",
     )?;
+    ensure_column(connection, "goal_runs", "deleted_at", "INTEGER")?;
+    ensure_column(connection, "goal_run_steps", "deleted_at", "INTEGER")?;
     ensure_column(connection, "goal_run_events", "step_index", "INTEGER")?;
     ensure_column(connection, "goal_run_events", "todo_snapshot_json", "TEXT")?;
+    ensure_column(connection, "goal_run_events", "deleted_at", "INTEGER")?;
     // BEAT-09: user_action column for dismissal tracking in action_audit.
     ensure_column(connection, "action_audit", "user_action", "TEXT")?;
     ensure_column(

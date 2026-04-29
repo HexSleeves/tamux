@@ -227,10 +227,12 @@ async fn list_undistilled_threads(
                             current.created_at AS latest_message_activity_at,
                             current.id AS latest_message_id
                      FROM agent_messages AS current
-                     WHERE NOT EXISTS (
+                     WHERE current.deleted_at IS NULL
+                       AND NOT EXISTS (
                          SELECT 1
                          FROM agent_messages AS newer
                          WHERE newer.thread_id = current.thread_id
+                           AND newer.deleted_at IS NULL
                            AND (
                                newer.created_at > current.created_at
                                OR (

@@ -250,6 +250,43 @@ fn has_optimistic_local_tail(existing: &AgentThread, incoming: &AgentThread) -> 
     })
 }
 
+fn find_matching_message_index(thread: &AgentThread, needle: &AgentMessage) -> Option<usize> {
+    thread
+        .messages
+        .iter()
+        .position(|message| message_snapshot_matches(message, needle))
+}
+
+fn realign_short_reload_window(existing: &AgentThread, incoming: &mut AgentThread) {
+    if incoming.messages.is_empty()
+        || incoming.total_message_count >= existing.total_message_count
+        || incoming.loaded_message_start != 0
+        || incoming
+            .messages
+            .iter()
+            .any(|message| message.message_kind == "compaction_artifact")
+        || overlapping_thread_messages_match(existing, incoming)
+    {
+        return;
+    }
+
+    let existing_end = existing
+        .loaded_message_end
+        .max(existing.loaded_message_start + existing.messages.len());
+    let incoming_start = incoming
+        .messages
+        .first()
+        .and_then(|message| find_matching_message_index(existing, message))
+        .map(|index| existing.loaded_message_start + index)
+        .unwrap_or(existing_end);
+
+    incoming.loaded_message_start = incoming_start;
+    incoming.loaded_message_end = incoming_start + incoming.messages.len();
+    incoming.total_message_count = existing
+        .total_message_count
+        .max(incoming.loaded_message_end);
+}
+
 fn should_replace_thread_window(existing: &AgentThread, incoming: &AgentThread) -> bool {
     !incoming.messages.is_empty()
         && incoming.total_message_count < existing.total_message_count
@@ -1293,6 +1330,7 @@ impl ChatState {
                 normalize_thread_window(&mut incoming);
                 if let Some(existing) = self.threads.iter_mut().find(|t| t.id == incoming.id) {
                     normalize_thread_window(existing);
+                    realign_short_reload_window(existing, &mut incoming);
                     let responder_before = active_thread_responder_identity(existing);
                     let replace_existing_window = should_replace_thread_window(existing, &incoming);
                     let (merged, merged_start, merged_end, disjoint) =

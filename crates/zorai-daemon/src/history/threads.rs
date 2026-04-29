@@ -1,5 +1,12 @@
 use super::*;
 
+fn now_millis_i64() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis().min(i64::MAX as u128) as i64)
+        .unwrap_or(0)
+}
+
 fn agent_message_search_document(message: &AgentDbMessage) -> super::search_index::SearchDocument {
     let mut tags = vec![message.role.clone()];
     if let Some(provider) = &message.provider {
@@ -150,7 +157,7 @@ impl HistoryStore {
                             COALESCE((
                                 SELECT MAX(created_at)
                                 FROM agent_messages
-                                WHERE thread_id = ?1
+                                WHERE thread_id = ?1 AND deleted_at IS NULL
                             ), 0)
                          FROM agent_threads
                          WHERE id = ?1",
@@ -224,7 +231,7 @@ impl HistoryStore {
 
                 let mut existing_stmt = transaction.prepare(
                     "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
-                     FROM agent_messages WHERE thread_id = ?1",
+                     FROM agent_messages WHERE thread_id = ?1 AND deleted_at IS NULL",
                 )?;
                 let existing_rows = existing_stmt.query_map(params![&thread.id], map_agent_message)?;
                 let mut existing_messages =
@@ -239,14 +246,27 @@ impl HistoryStore {
                     .iter()
                     .map(|message| message.id.clone())
                     .collect::<std::collections::HashSet<_>>();
+                let preserve_existing_prefix_before = messages
+                    .iter()
+                    .map(|message| message.created_at)
+                    .min()
+                    .filter(|_| {
+                        let existing_latest_created_at = existing_messages
+                            .values()
+                            .map(|message| message.created_at)
+                            .max()
+                            .unwrap_or(0);
+                        incoming_latest_created_at > existing_latest_created_at
+                            && incoming_message_count < existing_messages.len() as i64
+                    });
 
                 let changed_messages =
                     messages_requiring_search_reindex(&existing_messages, &messages);
                 for message in &changed_messages {
                     transaction.execute(
                         "INSERT OR REPLACE INTO agent_messages \
-                         (id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                         (id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json, deleted_at) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL)",
                         params![
                             message.id,
                             message.thread_id,
@@ -267,17 +287,24 @@ impl HistoryStore {
                 }
 
                 let stale_ids = existing_messages
-                    .keys()
-                    .filter(|id| !incoming_ids.contains(*id))
+                    .iter()
+                    .filter(|(id, message)| {
+                        !incoming_ids.contains(*id)
+                            && preserve_existing_prefix_before
+                                .map(|cutoff| message.created_at >= cutoff)
+                                .unwrap_or(true)
+                    })
+                    .map(|(id, _)| id)
                     .cloned()
                     .collect::<Vec<_>>();
                 if !stale_ids.is_empty() {
                     let placeholders =
                         std::iter::repeat_n("?", stale_ids.len()).collect::<Vec<_>>().join(", ");
                     let sql = format!(
-                        "DELETE FROM agent_messages WHERE thread_id = ? AND id IN ({placeholders})"
+                        "UPDATE agent_messages SET deleted_at = ? WHERE thread_id = ? AND deleted_at IS NULL AND id IN ({placeholders})"
                     );
                     let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+                    params.push(Box::new(now_millis_i64()));
                     params.push(Box::new(thread.id.clone()));
                     for id in stale_ids {
                         params.push(Box::new(id));
@@ -363,7 +390,7 @@ impl HistoryStore {
                             COALESCE((
                                 SELECT MAX(created_at)
                                 FROM agent_messages
-                                WHERE thread_id = ?1
+                                WHERE thread_id = ?1 AND deleted_at IS NULL
                             ), 0)
                          FROM agent_threads
                          WHERE id = ?1",
@@ -405,7 +432,7 @@ impl HistoryStore {
 
                 let mut existing_stmt = transaction.prepare(
                     "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
-                     FROM agent_messages WHERE thread_id = ?1",
+                     FROM agent_messages WHERE thread_id = ?1 AND deleted_at IS NULL",
                 )?;
                 let existing_rows = existing_stmt.query_map(params![&thread.id], map_agent_message)?;
                 let mut existing_messages =
@@ -460,16 +487,28 @@ impl HistoryStore {
                     ],
                 )?;
 
-                transaction.execute(
-                    "DELETE FROM agent_messages WHERE thread_id = ?1",
-                    params![&thread.id],
-                )?;
+                if !stale_ids.is_empty() {
+                    let placeholders =
+                        std::iter::repeat_n("?", stale_ids.len()).collect::<Vec<_>>().join(", ");
+                    let sql = format!(
+                        "UPDATE agent_messages SET deleted_at = ? WHERE thread_id = ? AND deleted_at IS NULL AND id IN ({placeholders})"
+                    );
+                    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+                    params.push(Box::new(now_millis_i64()));
+                    params.push(Box::new(thread.id.clone()));
+                    for id in &stale_ids {
+                        params.push(Box::new(id.clone()));
+                    }
+                    let refs: Vec<&dyn rusqlite::types::ToSql> =
+                        params.iter().map(|value| value.as_ref()).collect();
+                    transaction.execute(&sql, refs.as_slice())?;
+                }
 
                 for message in &messages {
                     transaction.execute(
                         "INSERT OR REPLACE INTO agent_messages \
-                         (id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json) \
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                         (id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json, deleted_at) \
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL)",
                         params![
                             message.id,
                             message.thread_id,
@@ -520,7 +559,11 @@ impl HistoryStore {
         let id = id.to_string();
         self.conn
             .call(move |conn| {
-                conn.execute("DELETE FROM agent_threads WHERE id = ?1", params![id])?;
+                let deleted_at = now_millis_i64();
+                conn.execute(
+                    "UPDATE agent_threads SET deleted_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
+                    params![id, deleted_at],
+                )?;
                 Ok(())
             })
             .await
@@ -531,7 +574,7 @@ impl HistoryStore {
         self.read_conn.call(move |conn| {
         let mut stmt = conn.prepare(
             "SELECT id, workspace_id, surface_id, pane_id, agent_name, title, created_at, updated_at, message_count, total_tokens, last_preview, metadata_json \
-             FROM agent_threads ORDER BY updated_at DESC",
+             FROM agent_threads WHERE deleted_at IS NULL ORDER BY updated_at DESC",
         )?;
         let rows = stmt.query_map([], map_agent_thread)?;
         Ok(rows.filter_map(|row| row.ok()).collect())
@@ -544,7 +587,7 @@ impl HistoryStore {
         conn
             .query_row(
                 "SELECT id, workspace_id, surface_id, pane_id, agent_name, title, created_at, updated_at, message_count, total_tokens, last_preview, metadata_json \
-                 FROM agent_threads WHERE id = ?1",
+                 FROM agent_threads WHERE id = ?1 AND deleted_at IS NULL",
                 params![id],
                 map_agent_thread,
             )
@@ -559,8 +602,8 @@ impl HistoryStore {
         self.conn.call(move |conn| {
         conn.execute(
             "INSERT OR REPLACE INTO agent_messages \
-             (id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             (id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json, deleted_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, NULL)",
             params![
                 message.id,
                 message.thread_id,
@@ -646,27 +689,98 @@ impl HistoryStore {
         }
         let thread_id = thread_id.to_string();
         let message_ids: Vec<String> = message_ids.iter().map(|s| s.to_string()).collect();
-        self.conn
+        let deleted_ids = self.conn
             .call(move |conn| {
                 let placeholders: Vec<String> =
                     message_ids.iter().map(|_| "?".to_string()).collect();
-                let sql = format!(
-                    "DELETE FROM agent_messages WHERE thread_id = ? AND id IN ({})",
-                    placeholders.join(", ")
-                );
                 let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
                 params.push(Box::new(thread_id.to_string()));
-                for id in message_ids {
+                for id in &message_ids {
                     params.push(Box::new(id.to_string()));
                 }
                 let refs: Vec<&dyn rusqlite::types::ToSql> =
                     params.iter().map(|p| p.as_ref()).collect();
-                let count = conn.execute(&sql, refs.as_slice())?;
+
+                let select_sql = format!(
+                    "SELECT id FROM agent_messages WHERE thread_id = ? AND deleted_at IS NULL AND id IN ({})",
+                    placeholders.join(", ")
+                );
+                let mut stmt = conn.prepare(&select_sql)?;
+                let rows = stmt.query_map(refs.as_slice(), |row| row.get::<_, String>(0))?;
+                let deleted_ids = rows.collect::<std::result::Result<Vec<_>, _>>()?;
+                drop(stmt);
+                if deleted_ids.is_empty() {
+                    return Ok(deleted_ids);
+                }
+
+                let update_sql = format!(
+                    "UPDATE agent_messages SET deleted_at = ? WHERE thread_id = ? AND deleted_at IS NULL AND id IN ({})",
+                    placeholders.join(", ")
+                );
+                let mut update_params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+                update_params.push(Box::new(now_millis_i64()));
+                update_params.push(Box::new(thread_id.to_string()));
+                for id in message_ids {
+                    update_params.push(Box::new(id));
+                }
+                let update_refs: Vec<&dyn rusqlite::types::ToSql> =
+                    update_params.iter().map(|p| p.as_ref()).collect();
+                conn.execute(&update_sql, update_refs.as_slice())?;
                 refresh_thread_stats(conn, &thread_id)?;
-                Ok(count)
+                Ok(deleted_ids)
             })
             .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let count = deleted_ids.len();
+        apply_agent_message_search_changes(self, &[], deleted_ids);
+        Ok(count)
+    }
+
+    pub async fn restore_messages(&self, thread_id: &str, message_ids: &[&str]) -> Result<usize> {
+        if message_ids.is_empty() {
+            return Ok(0);
+        }
+        let thread_id = thread_id.to_string();
+        let message_ids: Vec<String> = message_ids.iter().map(|s| s.to_string()).collect();
+        let restored_messages = self
+            .conn
+            .call(move |conn| {
+                let placeholders: Vec<String> =
+                    message_ids.iter().map(|_| "?".to_string()).collect();
+                let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+                params.push(Box::new(thread_id.to_string()));
+                for id in &message_ids {
+                    params.push(Box::new(id.to_string()));
+                }
+                let refs: Vec<&dyn rusqlite::types::ToSql> =
+                    params.iter().map(|p| p.as_ref()).collect();
+
+                let select_sql = format!(
+                    "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
+                     FROM agent_messages WHERE thread_id = ? AND deleted_at IS NOT NULL AND id IN ({})",
+                    placeholders.join(", ")
+                );
+                let mut stmt = conn.prepare(&select_sql)?;
+                let rows = stmt.query_map(refs.as_slice(), map_agent_message)?;
+                let restored_messages = rows.filter_map(|row| row.ok()).collect::<Vec<_>>();
+                drop(stmt);
+                if restored_messages.is_empty() {
+                    return Ok(restored_messages);
+                }
+
+                let update_sql = format!(
+                    "UPDATE agent_messages SET deleted_at = NULL WHERE thread_id = ? AND deleted_at IS NOT NULL AND id IN ({})",
+                    placeholders.join(", ")
+                );
+                conn.execute(&update_sql, refs.as_slice())?;
+                refresh_thread_stats(conn, &thread_id)?;
+                Ok(restored_messages)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let count = restored_messages.len();
+        index_agent_messages(self, &restored_messages);
+        Ok(count)
     }
 
     pub async fn list_messages(
@@ -674,23 +788,45 @@ impl HistoryStore {
         thread_id: &str,
         limit: Option<usize>,
     ) -> Result<Vec<AgentDbMessage>> {
+        self.list_messages_with_deleted_flag(thread_id, limit, false)
+            .await
+    }
+
+    pub async fn list_messages_with_deleted(
+        &self,
+        thread_id: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<AgentDbMessage>> {
+        self.list_messages_with_deleted_flag(thread_id, limit, true)
+            .await
+    }
+
+    async fn list_messages_with_deleted_flag(
+        &self,
+        thread_id: &str,
+        limit: Option<usize>,
+        include_deleted: bool,
+    ) -> Result<Vec<AgentDbMessage>> {
         let thread_id = thread_id.to_string();
         self.read_conn.call(move |conn| {
+            let deleted_filter = if include_deleted { "" } else { " AND deleted_at IS NULL" };
             let messages = if let Some(limit) = limit {
                 let limit = limit.max(1) as i64;
-                let mut stmt = conn.prepare(
+                let sql = format!(
                     "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
-                     FROM agent_messages WHERE thread_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2",
-                )?;
+                     FROM agent_messages WHERE thread_id = ?1{deleted_filter} ORDER BY created_at DESC, rowid DESC LIMIT ?2",
+                );
+                let mut stmt = conn.prepare(&sql)?;
                 let rows = stmt.query_map(params![thread_id, limit], map_agent_message)?;
                 let mut messages: Vec<AgentDbMessage> = rows.filter_map(|row| row.ok()).collect();
                 messages.reverse();
                 messages
             } else {
-                let mut stmt = conn.prepare(
+                let sql = format!(
                     "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
-                     FROM agent_messages WHERE thread_id = ?1 ORDER BY created_at ASC, rowid ASC",
-                )?;
+                     FROM agent_messages WHERE thread_id = ?1{deleted_filter} ORDER BY created_at ASC, rowid ASC",
+                );
+                let mut stmt = conn.prepare(&sql)?;
                 let rows = stmt.query_map(params![thread_id], map_agent_message)?;
                 rows.filter_map(|row| row.ok()).collect()
             };
@@ -708,7 +844,7 @@ impl HistoryStore {
         self.read_conn
             .call(move |conn| {
                 let total_count = conn.query_row(
-                    "SELECT COUNT(*) FROM agent_messages WHERE thread_id = ?1",
+                    "SELECT COUNT(*) FROM agent_messages WHERE thread_id = ?1 AND deleted_at IS NULL",
                     params![&thread_id],
                     |row| row.get::<_, i64>(0),
                 )?;
@@ -721,7 +857,7 @@ impl HistoryStore {
 
                 let mut stmt = conn.prepare(
                     "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
-                     FROM agent_messages WHERE thread_id = ?1 ORDER BY created_at ASC, rowid ASC LIMIT ?2 OFFSET ?3",
+                     FROM agent_messages WHERE thread_id = ?1 AND deleted_at IS NULL ORDER BY created_at ASC, rowid ASC LIMIT ?2 OFFSET ?3",
                 )?;
                 let rows = stmt.query_map(
                     params![&thread_id, end.saturating_sub(start) as i64, start as i64],
@@ -751,7 +887,7 @@ impl HistoryStore {
                         SELECT ROW_NUMBER() OVER (ORDER BY created_at ASC, rowid ASC) - 1 AS absolute_index,
                                id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json
                         FROM agent_messages
-                        WHERE thread_id = ?1
+                        WHERE thread_id = ?1 AND deleted_at IS NULL
                      )
                      WHERE metadata_json IS NOT NULL
                        AND json_valid(metadata_json)
@@ -799,7 +935,7 @@ impl HistoryStore {
                 let limit = limit.clamp(1, 1000) as i64;
                 let mut stmt = conn.prepare(
                     "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
-                     FROM agent_messages WHERE thread_id = ?1 ORDER BY created_at DESC, rowid DESC LIMIT ?2",
+                     FROM agent_messages WHERE thread_id = ?1 AND deleted_at IS NULL ORDER BY created_at DESC, rowid DESC LIMIT ?2",
                 )?;
                 let rows = stmt.query_map(params![thread_id, limit], map_agent_message)?;
                 let mut messages: Vec<AgentDbMessage> = rows.filter_map(|row| row.ok()).collect();
@@ -826,7 +962,7 @@ impl HistoryStore {
                         let mut stmt = conn.prepare(
                             "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
                              FROM agent_messages \
-                             WHERE thread_id = ?1 AND (created_at > ?2 OR (created_at = ?2 AND id > ?3)) \
+                             WHERE thread_id = ?1 AND deleted_at IS NULL AND (created_at > ?2 OR (created_at = ?2 AND id > ?3)) \
                              ORDER BY created_at ASC, id ASC LIMIT ?4",
                         )?;
                         let rows = stmt.query_map(
@@ -839,7 +975,7 @@ impl HistoryStore {
                         let mut stmt = conn.prepare(
                             "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
                              FROM agent_messages \
-                             WHERE thread_id = ?1 AND (created_at > ?2 OR (created_at = ?2 AND id > ?3)) \
+                             WHERE thread_id = ?1 AND deleted_at IS NULL AND (created_at > ?2 OR (created_at = ?2 AND id > ?3)) \
                              ORDER BY created_at ASC, id ASC",
                         )?;
                         let rows = stmt.query_map(
@@ -852,7 +988,7 @@ impl HistoryStore {
                         let limit = limit.max(1) as i64;
                         let mut stmt = conn.prepare(
                             "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
-                             FROM agent_messages WHERE thread_id = ?1 ORDER BY created_at ASC, id ASC LIMIT ?2",
+                             FROM agent_messages WHERE thread_id = ?1 AND deleted_at IS NULL ORDER BY created_at ASC, id ASC LIMIT ?2",
                         )?;
                         let rows = stmt.query_map(params![thread_id, limit], map_agent_message)?;
                         rows.filter_map(|row| row.ok()).collect()
@@ -860,7 +996,7 @@ impl HistoryStore {
                     (None, None) => {
                         let mut stmt = conn.prepare(
                             "SELECT id, thread_id, created_at, role, content, provider, model, input_tokens, output_tokens, total_tokens, cost_usd, reasoning, tool_calls_json, metadata_json \
-                             FROM agent_messages WHERE thread_id = ?1 ORDER BY created_at ASC, id ASC",
+                             FROM agent_messages WHERE thread_id = ?1 AND deleted_at IS NULL ORDER BY created_at ASC, id ASC",
                         )?;
                         let rows = stmt.query_map(params![thread_id], map_agent_message)?;
                         rows.filter_map(|row| row.ok()).collect()
@@ -1145,8 +1281,8 @@ impl HistoryStore {
             .call(move |conn| {
                 conn.execute(
                     "INSERT OR REPLACE INTO snapshot_index \
-             (snapshot_id, workspace_id, session_id, kind, label, path, created_at, details_json) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (snapshot_id, workspace_id, session_id, kind, label, path, created_at, details_json, deleted_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)",
                     params![
                         entry.snapshot_id,
                         entry.workspace_id,
@@ -1172,10 +1308,10 @@ impl HistoryStore {
         self.conn.call(move |conn| {
         let sql = if workspace_id.is_some() {
             "SELECT snapshot_id, workspace_id, session_id, kind, label, path, created_at, details_json \
-             FROM snapshot_index WHERE workspace_id = ?1 OR workspace_id IS NULL ORDER BY created_at DESC"
+             FROM snapshot_index WHERE (workspace_id = ?1 OR workspace_id IS NULL) AND deleted_at IS NULL ORDER BY created_at DESC"
         } else {
             "SELECT snapshot_id, workspace_id, session_id, kind, label, path, created_at, details_json \
-             FROM snapshot_index ORDER BY created_at DESC"
+             FROM snapshot_index WHERE deleted_at IS NULL ORDER BY created_at DESC"
         };
         let mut stmt = conn.prepare(sql)?;
         let rows = if let Some(workspace_id) = workspace_id {
@@ -1196,7 +1332,7 @@ impl HistoryStore {
         conn
             .query_row(
                 "SELECT snapshot_id, workspace_id, session_id, kind, label, path, created_at, details_json \
-                 FROM snapshot_index WHERE snapshot_id = ?1",
+                 FROM snapshot_index WHERE snapshot_id = ?1 AND deleted_at IS NULL",
                 params![snapshot_id],
                 map_snapshot_index_entry,
             )
@@ -1210,8 +1346,8 @@ impl HistoryStore {
         self.conn
             .call(move |conn| {
                 let affected = conn.execute(
-                    "DELETE FROM snapshot_index WHERE snapshot_id = ?1",
-                    params![snapshot_id],
+                    "UPDATE snapshot_index SET deleted_at = ?2 WHERE snapshot_id = ?1 AND deleted_at IS NULL",
+                    params![snapshot_id, now_ts() as i64],
                 )?;
                 Ok(affected > 0)
             })

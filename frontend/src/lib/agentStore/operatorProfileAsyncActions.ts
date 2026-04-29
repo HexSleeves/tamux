@@ -91,9 +91,15 @@ export function createOperatorProfileAsyncActions(
             error: null,
             sessionId: started.session_id,
             sessionKind: typeof started.kind === "string" ? started.kind : kind,
-            question: null,
+            question: state.operatorProfile.question?.session_id === started.session_id
+              ? state.operatorProfile.question
+              : null,
           },
         }));
+        const currentQuestion = get().operatorProfile.question;
+        if (currentQuestion?.session_id === started.session_id) {
+          return currentQuestion;
+        }
         return await get().fetchNextOperatorProfileQuestion(started.session_id);
       } catch (error) {
         setOperatorProfileError(set, error);
@@ -160,6 +166,19 @@ export function createOperatorProfileAsyncActions(
           await get().getOperatorProfileSummary();
           return;
         }
+        if (isOperatorProfileQuestion(response)) {
+          set((current) => ({
+            operatorProfile: {
+              ...current.operatorProfile,
+              loading: false,
+              panelOpen: true,
+              error: null,
+              sessionId: response.session_id,
+              question: response,
+            },
+          }));
+          return;
+        }
         if (!isOperatorProfileProgress(response)) {
           setOperatorProfileLoading(set, false, "Unexpected operator profile progress response");
           return;
@@ -198,6 +217,19 @@ export function createOperatorProfileAsyncActions(
           await get().getOperatorProfileSummary();
           return;
         }
+        if (isOperatorProfileQuestion(response)) {
+          set((current) => ({
+            operatorProfile: {
+              ...current.operatorProfile,
+              loading: false,
+              panelOpen: true,
+              error: null,
+              sessionId: response.session_id,
+              question: response,
+            },
+          }));
+          return;
+        }
         if (!isOperatorProfileProgress(response)) {
           setOperatorProfileLoading(set, false, "Unexpected operator profile progress response");
           return;
@@ -234,6 +266,19 @@ export function createOperatorProfileAsyncActions(
         if (isOperatorProfileSessionCompleted(response)) {
           setOperatorProfileCompleted(set);
           await get().getOperatorProfileSummary();
+          return;
+        }
+        if (isOperatorProfileQuestion(response)) {
+          set((current) => ({
+            operatorProfile: {
+              ...current.operatorProfile,
+              loading: false,
+              panelOpen: true,
+              error: null,
+              sessionId: response.session_id,
+              question: response,
+            },
+          }));
           return;
         }
         if (!isOperatorProfileProgress(response)) {

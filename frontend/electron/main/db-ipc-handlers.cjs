@@ -150,6 +150,36 @@ function registerDbIpcHandlers(ipcMain, runtime) {
             return [];
         }
     });
+    ipcMain.handle('db-list-database-tables', async () => {
+        try {
+            return await sendDbQuery({ type: 'list-database-tables' }, 'database-tables');
+        } catch {
+            return [];
+        }
+    });
+    ipcMain.handle('db-query-database-rows', async (_event, opts = {}) => {
+        try {
+            return await sendDbQuery({
+                type: 'query-database-rows',
+                table_name: typeof opts.tableName === 'string' ? opts.tableName : '',
+                offset: Number.isFinite(opts.offset) ? Math.max(0, Math.trunc(opts.offset)) : 0,
+                limit: Number.isFinite(opts.limit) ? Math.max(1, Math.trunc(opts.limit)) : 100,
+            }, 'database-rows');
+        } catch {
+            return null;
+        }
+    });
+    ipcMain.handle('db-update-database-rows', async (_event, tableName, updates) => {
+        try {
+            return await sendDbQuery({
+                type: 'update-database-rows',
+                table_name: typeof tableName === 'string' ? tableName : '',
+                updates_json: JSON.stringify(Array.isArray(updates) ? updates : []),
+            }, 'database-update-ack');
+        } catch (error) {
+            return { updatedRows: 0, error: error?.message || String(error) };
+        }
+    });
 }
 
 module.exports = { registerDbIpcHandlers };

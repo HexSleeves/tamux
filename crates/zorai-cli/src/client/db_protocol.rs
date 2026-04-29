@@ -27,6 +27,8 @@ pub(super) enum DbBridgeCommand {
     ListAgentThreads,
     GetAgentThread {
         thread_id: String,
+        #[serde(default, alias = "trashed")]
+        include_deleted: bool,
     },
     AddAgentMessage {
         message_json: String,
@@ -35,9 +37,15 @@ pub(super) enum DbBridgeCommand {
         thread_id: String,
         message_ids: Vec<String>,
     },
+    RestoreAgentMessages {
+        thread_id: String,
+        message_ids: Vec<String>,
+    },
     ListAgentMessages {
         thread_id: String,
         limit: Option<usize>,
+        #[serde(default, alias = "trashed")]
+        include_deleted: bool,
     },
     UpsertTranscriptIndex {
         entry_json: String,
@@ -58,6 +66,16 @@ pub(super) enum DbBridgeCommand {
         category: Option<String>,
         pane_id: Option<String>,
         limit: Option<usize>,
+    },
+    ListDatabaseTables,
+    QueryDatabaseRows {
+        table_name: String,
+        offset: usize,
+        limit: usize,
+    },
+    UpdateDatabaseRows {
+        table_name: String,
+        updates_json: String,
     },
     Shutdown,
 }

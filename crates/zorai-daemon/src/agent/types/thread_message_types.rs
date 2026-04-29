@@ -354,6 +354,7 @@ pub struct ToolResult {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeferredVisibleThreadContinuation {
     pub agent_id: String,
+    pub task_id: Option<String>,
     pub preferred_session_hint: Option<String>,
     pub llm_user_content: String,
     pub force_compaction: bool,

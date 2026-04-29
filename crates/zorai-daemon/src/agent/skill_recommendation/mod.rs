@@ -9,7 +9,9 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use ranking::rank_skill_candidates;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use types::{GraphSkillSignal, SkillCandidateInput};
 
 pub(crate) use metadata::extract_skill_metadata;
@@ -21,6 +23,7 @@ pub(crate) use types::{
 const MAX_SKILL_EXCERPT_LINES: usize = 40;
 const MAX_SKILL_EXCERPT_CHARS: usize = 2400;
 const DISCOVERY_CURSOR_PREFIX: &str = "skill-discovery:";
+static GUIDELINE_INDEX_FINGERPRINTS: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
 
 pub(crate) async fn discover_local_skills(
     history: &HistoryStore,
@@ -65,7 +68,7 @@ pub(crate) async fn discover_local_guidelines(
     cfg: &SkillRecommendationConfig,
 ) -> Result<SkillDiscoveryResult> {
     let candidates = collect_filesystem_guideline_candidates(guidelines_root)?;
-    index_guideline_candidates(history, &candidates);
+    index_guideline_candidates(history, guidelines_root, &candidates);
     let graph_signals = HashMap::new();
 
     let mut result = rank_skill_candidates(
@@ -282,6 +285,9 @@ fn relative_path_suffixes(relative_path: &str) -> Vec<String> {
         let Some((_, tail)) = current.split_once('/') else {
             break;
         };
+        if !tail.contains('/') && tail.eq_ignore_ascii_case("SKILL.md") {
+            break;
+        }
         current = tail.to_string();
     }
     suffixes
@@ -407,12 +413,9 @@ fn collect_registered_skill_candidates(
 
         let (skill_path, metadata_relative_path) =
             resolve_skill_document_path(skills_root, &record.relative_path);
-        let content = std::fs::read_to_string(&skill_path).with_context(|| {
-            format!(
-                "failed to read skill recommendation file {}",
-                skill_path.display()
-            )
-        })?;
+        let Some(content) = read_recommendation_document(&skill_path, "skill")? else {
+            continue;
+        };
         candidates.push(SkillCandidateInput {
             metadata: extract_skill_metadata(&metadata_relative_path, &content),
             excerpt: excerpt_skill(&content),
@@ -433,12 +436,9 @@ fn collect_filesystem_skill_candidates(skills_root: &Path) -> Result<Vec<SkillCa
             .unwrap_or(path.as_path())
             .to_string_lossy()
             .replace('\\', "/");
-        let content = std::fs::read_to_string(&path).with_context(|| {
-            format!(
-                "failed to read skill recommendation file {}",
-                path.display()
-            )
-        })?;
+        let Some(content) = read_recommendation_document(&path, "skill")? else {
+            continue;
+        };
         let derived = derive_skill_metadata(&relative_path, &content);
         candidates.push(SkillCandidateInput {
             metadata: extract_skill_metadata(&relative_path, &content),
@@ -463,12 +463,9 @@ fn collect_filesystem_guideline_candidates(
             .unwrap_or(path.as_path())
             .to_string_lossy()
             .replace('\\', "/");
-        let content = std::fs::read_to_string(&path).with_context(|| {
-            format!(
-                "failed to read guideline recommendation file {}",
-                path.display()
-            )
-        })?;
+        let Some(content) = read_recommendation_document(&path, "guideline")? else {
+            continue;
+        };
         let derived = derive_skill_metadata(&relative_path, &content);
         candidates.push(SkillCandidateInput {
             metadata: extract_skill_metadata(&relative_path, &content),
@@ -480,28 +477,120 @@ fn collect_filesystem_guideline_candidates(
     Ok(candidates)
 }
 
-fn index_guideline_candidates(history: &HistoryStore, candidates: &[SkillCandidateInput]) {
-    for candidate in candidates {
-        let mut tags = candidate.record.context_tags.clone();
-        tags.extend(candidate.metadata.keywords.iter().cloned());
-        tags.extend(candidate.metadata.triggers.iter().cloned());
-        history.upsert_search_document(crate::history::search_index::SearchDocument {
-            source_kind: crate::history::search_index::SearchSourceKind::Guideline,
-            source_id: candidate.record.relative_path.clone(),
-            title: candidate.record.skill_name.clone(),
-            body: format!("{}\n{}", candidate.metadata.search_text, candidate.excerpt),
-            tags,
-            workspace_id: None,
-            thread_id: None,
-            agent_id: None,
-            timestamp: candidate.record.updated_at as i64,
-            metadata_json: serde_json::to_string(&serde_json::json!({
-                "variant_id": candidate.record.variant_id,
-                "variant_name": candidate.record.variant_name,
-                "recommended_action": format!("read_guideline {}", candidate.record.relative_path),
-            }))
-            .ok(),
-        });
+fn read_recommendation_document(path: &Path, document_kind: &str) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::warn!(
+                path = %path.display(),
+                document_kind,
+                "recommendation document disappeared before discovery could read it"
+            );
+            Ok(None)
+        }
+        Err(error) => Err(error).with_context(|| {
+            format!(
+                "failed to read {document_kind} recommendation file {}",
+                path.display()
+            )
+        }),
+    }
+}
+
+fn index_guideline_candidates(
+    history: &HistoryStore,
+    guidelines_root: &Path,
+    candidates: &[SkillCandidateInput],
+) {
+    let Some(index) = history.search_index.as_ref() else {
+        return;
+    };
+    let cache_key = guideline_index_cache_key(guidelines_root);
+    let fingerprint = guideline_candidates_fingerprint(candidates);
+    if guideline_index_cache_contains(&cache_key, fingerprint) {
+        return;
+    }
+
+    let documents = candidates
+        .iter()
+        .map(|candidate| {
+            let mut tags = candidate.record.context_tags.clone();
+            tags.extend(candidate.metadata.keywords.iter().cloned());
+            tags.extend(candidate.metadata.triggers.iter().cloned());
+            crate::history::search_index::SearchDocument {
+                source_kind: crate::history::search_index::SearchSourceKind::Guideline,
+                source_id: candidate.record.relative_path.clone(),
+                title: candidate.record.skill_name.clone(),
+                body: format!("{}\n{}", candidate.metadata.search_text, candidate.excerpt),
+                tags,
+                workspace_id: None,
+                thread_id: None,
+                agent_id: None,
+                timestamp: candidate.record.updated_at as i64,
+                metadata_json: serde_json::to_string(&serde_json::json!({
+                    "variant_id": candidate.record.variant_id,
+                    "variant_name": candidate.record.variant_name,
+                    "recommended_action": format!("read_guideline {}", candidate.record.relative_path),
+                }))
+                .ok(),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    if let Err(error) = index.upsert_many(documents) {
+        tracing::warn!(%error, "failed to synchronously index guideline candidates");
+    } else {
+        record_guideline_index_fingerprint(cache_key, fingerprint);
+    }
+}
+
+fn guideline_index_cache_key(guidelines_root: &Path) -> String {
+    std::fs::canonicalize(guidelines_root)
+        .unwrap_or_else(|_| guidelines_root.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
+fn guideline_candidates_fingerprint(candidates: &[SkillCandidateInput]) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut candidate_keys = candidates
+        .iter()
+        .map(|candidate| {
+            let mut tags = candidate.record.context_tags.clone();
+            tags.sort();
+            let mut keywords = candidate.metadata.keywords.clone();
+            keywords.sort();
+            let mut triggers = candidate.metadata.triggers.clone();
+            triggers.sort();
+            (
+                candidate.record.relative_path.clone(),
+                candidate.record.skill_name.clone(),
+                candidate.record.variant_name.clone(),
+                candidate.metadata.search_text.clone(),
+                candidate.excerpt.clone(),
+                tags,
+                keywords,
+                triggers,
+            )
+        })
+        .collect::<Vec<_>>();
+    candidate_keys.sort_by(|left, right| left.0.cmp(&right.0));
+    candidate_keys.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn guideline_index_cache_contains(cache_key: &str, fingerprint: u64) -> bool {
+    let cache = GUIDELINE_INDEX_FINGERPRINTS.get_or_init(|| Mutex::new(HashMap::new()));
+    cache
+        .lock()
+        .map(|cache| cache.get(cache_key).copied() == Some(fingerprint))
+        .unwrap_or(false)
+}
+
+fn record_guideline_index_fingerprint(cache_key: String, fingerprint: u64) {
+    let cache = GUIDELINE_INDEX_FINGERPRINTS.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(cache_key, fingerprint);
     }
 }
 

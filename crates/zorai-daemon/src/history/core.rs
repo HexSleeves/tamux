@@ -124,7 +124,7 @@ impl HistoryStore {
     pub async fn list_agent_config_items(&self) -> Result<Vec<(String, serde_json::Value)>> {
         self.read_conn.call(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT key_path, value_json FROM agent_config_items ORDER BY length(key_path) ASC, key_path ASC",
+                "SELECT key_path, value_json FROM agent_config_items WHERE deleted_at IS NULL ORDER BY length(key_path) ASC, key_path ASC",
             )?;
             let rows = stmt.query_map([], |row| {
                 let key_path = row.get::<_, String>(0)?;
@@ -153,11 +153,14 @@ impl HistoryStore {
         let items = items.clone();
         self.conn.call(move |conn| {
             let transaction = conn.unchecked_transaction()?;
-            transaction.execute("DELETE FROM agent_config_items", [])?;
             let now = now_ts() as i64;
+            transaction.execute(
+                "UPDATE agent_config_items SET deleted_at = ?1 WHERE deleted_at IS NULL",
+                params![now],
+            )?;
             for (key_path, value_json) in &items {
                 transaction.execute(
-                    "INSERT OR REPLACE INTO agent_config_items (key_path, value_json, updated_at) VALUES (?1, ?2, ?3)",
+                    "INSERT OR REPLACE INTO agent_config_items (key_path, value_json, updated_at, deleted_at) VALUES (?1, ?2, ?3, NULL)",
                     params![key_path, value_json, now],
                 )?;
             }
@@ -179,12 +182,12 @@ impl HistoryStore {
             let prefix = format!("{key_path}/%");
             let now = now_ts() as i64;
             transaction.execute(
-                "DELETE FROM agent_config_items \
-                 WHERE key_path = ?1 OR key_path LIKE ?2 OR ?1 LIKE key_path || '/%'",
-                params![key_path, prefix],
+                "UPDATE agent_config_items SET deleted_at = ?3 \
+                 WHERE deleted_at IS NULL AND (key_path = ?1 OR key_path LIKE ?2 OR ?1 LIKE key_path || '/%')",
+                params![key_path, prefix, now],
             )?;
             transaction.execute(
-                "INSERT OR REPLACE INTO agent_config_items (key_path, value_json, updated_at) VALUES (?1, ?2, ?3)",
+                "INSERT OR REPLACE INTO agent_config_items (key_path, value_json, updated_at, deleted_at) VALUES (?1, ?2, ?3, NULL)",
                 params![key_path, value_json.clone(), now],
             )?;
             transaction.execute(
@@ -209,7 +212,7 @@ impl HistoryStore {
                     .query_row(
                         "SELECT provider_id, auth_mode, state_json, updated_at
                          FROM provider_auth_state
-                         WHERE provider_id = ?1 AND auth_mode = ?2",
+                         WHERE provider_id = ?1 AND auth_mode = ?2 AND deleted_at IS NULL",
                         params![provider_id, auth_mode],
                         |row| {
                             let state_json = row.get::<_, String>(2)?;
@@ -245,8 +248,8 @@ impl HistoryStore {
             .call(move |conn| {
                 conn.execute(
                     "INSERT OR REPLACE INTO provider_auth_state
-                     (provider_id, auth_mode, state_json, updated_at)
-                     VALUES (?1, ?2, ?3, ?4)",
+                     (provider_id, auth_mode, state_json, updated_at, deleted_at)
+                     VALUES (?1, ?2, ?3, ?4, NULL)",
                     params![provider_id, auth_mode, state_json, now_ts() as i64],
                 )?;
                 Ok(())
@@ -265,8 +268,8 @@ impl HistoryStore {
         self.conn
             .call(move |conn| {
                 conn.execute(
-                    "DELETE FROM provider_auth_state WHERE provider_id = ?1 AND auth_mode = ?2",
-                    params![provider_id, auth_mode],
+                    "UPDATE provider_auth_state SET deleted_at = ?3 WHERE provider_id = ?1 AND auth_mode = ?2 AND deleted_at IS NULL",
+                    params![provider_id, auth_mode, now_ts() as i64],
                 )?;
                 Ok(())
             })

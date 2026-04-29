@@ -1096,6 +1096,91 @@ fn thread_deleted_event_removes_thread_from_chat_state() {
 }
 
 #[test]
+fn stale_thread_detail_after_delete_does_not_recreate_thread() {
+    let mut model = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadListReceived(vec![
+        chat::AgentThread {
+            id: "thread-1".into(),
+            title: "Thread One".into(),
+            ..Default::default()
+        },
+        chat::AgentThread {
+            id: "thread-2".into(),
+            title: "Thread Two".into(),
+            ..Default::default()
+        },
+    ]));
+    model.open_thread_conversation("thread-1".into());
+
+    model.handle_client_event(ClientEvent::ThreadDeleted {
+        thread_id: "thread-1".into(),
+        deleted: true,
+    });
+    model.handle_client_event(ClientEvent::ThreadDetail(Some(crate::wire::AgentThread {
+        id: "thread-1".into(),
+        title: "Thread One".into(),
+        messages: vec![crate::wire::AgentMessage {
+            role: crate::wire::MessageRole::Assistant,
+            content: "stale detail".into(),
+            timestamp: 1,
+            ..Default::default()
+        }],
+        created_at: 1,
+        updated_at: 1,
+        ..Default::default()
+    })));
+
+    assert!(model
+        .chat
+        .threads()
+        .iter()
+        .all(|thread| thread.id != "thread-1"));
+    assert_eq!(model.chat.active_thread_id(), Some("thread-2"));
+}
+
+#[test]
+fn stale_thread_list_after_delete_does_not_recreate_thread() {
+    let mut model = make_model();
+    model.handle_client_event(ClientEvent::ThreadList(vec![
+        crate::wire::AgentThread {
+            id: "thread-1".into(),
+            title: "Thread One".into(),
+            ..Default::default()
+        },
+        crate::wire::AgentThread {
+            id: "thread-2".into(),
+            title: "Thread Two".into(),
+            ..Default::default()
+        },
+    ]));
+    model.open_thread_conversation("thread-1".into());
+
+    model.handle_client_event(ClientEvent::ThreadDeleted {
+        thread_id: "thread-1".into(),
+        deleted: true,
+    });
+    model.handle_client_event(ClientEvent::ThreadList(vec![
+        crate::wire::AgentThread {
+            id: "thread-1".into(),
+            title: "Thread One".into(),
+            ..Default::default()
+        },
+        crate::wire::AgentThread {
+            id: "thread-2".into(),
+            title: "Thread Two".into(),
+            ..Default::default()
+        },
+    ]));
+
+    assert!(model
+        .chat
+        .threads()
+        .iter()
+        .all(|thread| thread.id != "thread-1"));
+    assert_eq!(model.chat.active_thread_id(), Some("thread-2"));
+}
+
+#[test]
 fn thread_deleted_event_reclamps_open_thread_picker_cursor() {
     let mut model = make_model();
     model.chat.reduce(chat::ChatAction::ThreadListReceived(vec![

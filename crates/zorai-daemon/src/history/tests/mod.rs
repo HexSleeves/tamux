@@ -10,6 +10,7 @@ async fn make_test_store() -> Result<(HistoryStore, PathBuf)> {
 
 mod browser_profiles;
 mod cognitive_resonance;
+mod database_viewer;
 mod dream_state;
 mod elastic_context;
 mod emergent_protocol;

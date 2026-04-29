@@ -12,7 +12,7 @@ use zorai_protocol::{
     SnapshotInfo, SymbolMatch, TelemetryLedgerStatus, TranscriptIndexEntry, WorkspaceTopology,
 };
 
-use crate::history::HistoryStore;
+use crate::history::{DatabaseRowUpdate, DatabaseTablePage, DatabaseTableSummary, HistoryStore};
 use crate::pty_session::PtySession;
 use crate::snapshot::SnapshotStore;
 use crate::state::{save_state, DaemonState, SavedSession};

@@ -331,7 +331,7 @@ fn add_available_tools_part_b(
         serde_json::json!({
             "type": "object",
             "properties": {
-                "query": { "type": "string", "description": "Brief intent query, 5-10 words." },
+                "query": { "type": "string", "description": "Brief intent query, 3-6 words." },
                 "limit": { "type": "integer", "description": "Maximum number of ranked guideline candidates to return (default: 3)" },
                 "session": { "type": "string", "description": "Optional live terminal session UUID for workspace-aware ranking" }
             },
@@ -370,7 +370,7 @@ fn add_available_tools_part_b(
         serde_json::json!({
             "type": "object",
             "properties": {
-                "query": { "type": "string", "description": "Brief intent query, 5-10 words." },
+                "query": { "type": "string", "description": "Brief intent query, 3-6 words." },
                 "limit": { "type": "integer", "description": "Maximum number of ranked skill candidates to return (default: 3)" },
                 "session": { "type": "string", "description": "Optional live terminal session UUID for workspace-aware ranking" }
             },

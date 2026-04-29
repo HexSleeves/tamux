@@ -66,7 +66,7 @@
   border-radius: 7px;
   display: grid;
   place-items: center;
-  background: url(./assets/icon.png) center/contain no-repeat;
+  background: url("../../../assets/icon.png") center/contain no-repeat;
 }
 
 .zorai-brand-mark span {
@@ -164,6 +164,13 @@
   border-color: var(--zorai-accent);
   color: #06100e;
   padding: 8px 10px;
+}
+
+.zorai-primary-button:disabled,
+.zorai-ghost-button:disabled,
+.zorai-icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 
 .zorai-ghost-button,

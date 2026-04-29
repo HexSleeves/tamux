@@ -238,16 +238,17 @@ impl HistoryStore {
                         .unwrap_or_default()
                         .as_millis() as i64
                         - (max_age_days as i64 * 86_400 * 1000);
-                    deleted += conn
-                        .execute("DELETE FROM action_audit WHERE timestamp < ?1", [cutoff])?
-                        as usize;
+                    deleted += conn.execute(
+                        "UPDATE action_audit SET deleted_at = ?2 WHERE timestamp < ?1 AND deleted_at IS NULL",
+                        params![cutoff, now_ts() as i64],
+                    )? as usize;
                 }
                 // Delete excess entries (keep newest max_entries)
                 if max_entries > 0 {
                     deleted += conn.execute(
-                        "DELETE FROM action_audit WHERE id NOT IN \
-                     (SELECT id FROM action_audit ORDER BY timestamp DESC LIMIT ?1)",
-                        [max_entries as i64],
+                        "UPDATE action_audit SET deleted_at = ?2 WHERE deleted_at IS NULL AND id NOT IN \
+                     (SELECT id FROM action_audit WHERE deleted_at IS NULL ORDER BY timestamp DESC LIMIT ?1)",
+                        params![max_entries as i64, now_ts() as i64],
                     )? as usize;
                 }
                 Ok(deleted)

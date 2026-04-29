@@ -52,10 +52,13 @@ impl HistoryStore {
         self.conn
             .call(move |conn| {
                 let tx = conn.transaction()?;
-                tx.execute("DELETE FROM cognitive_biases WHERE model_id = ?1", params![model_id])?;
+                tx.execute(
+                    "UPDATE cognitive_biases SET deleted_at = ?2 WHERE model_id = ?1 AND deleted_at IS NULL",
+                    params![model_id, now_ts() as i64],
+                )?;
                 for row in rows {
                     tx.execute(
-                        "INSERT INTO cognitive_biases (model_id, name, trigger_pattern_json, mitigation_prompt, severity, occurrence_count) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                        "INSERT INTO cognitive_biases (model_id, name, trigger_pattern_json, mitigation_prompt, severity, occurrence_count, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
                         params![
                             row.model_id,
                             row.name,
@@ -100,7 +103,7 @@ impl HistoryStore {
         self.conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, model_id, name, trigger_pattern_json, mitigation_prompt, severity, occurrence_count FROM cognitive_biases WHERE model_id = ?1 ORDER BY severity DESC, id ASC",
+                    "SELECT id, model_id, name, trigger_pattern_json, mitigation_prompt, severity, occurrence_count FROM cognitive_biases WHERE model_id = ?1 AND deleted_at IS NULL ORDER BY severity DESC, id ASC",
                 )?;
                 let rows = stmt.query_map(params![model_id], |row| {
                     Ok(CognitiveBiasRow {
@@ -128,10 +131,13 @@ impl HistoryStore {
         self.conn
             .call(move |conn| {
                 let tx = conn.transaction()?;
-                tx.execute("DELETE FROM workflow_profiles WHERE model_id = ?1", params![model_id])?;
+                tx.execute(
+                    "UPDATE workflow_profiles SET deleted_at = ?2 WHERE model_id = ?1 AND deleted_at IS NULL",
+                    params![model_id, now_ts() as i64],
+                )?;
                 for row in rows {
                     tx.execute(
-                        "INSERT INTO workflow_profiles (model_id, name, avg_success_rate, avg_steps, typical_tools_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+                        "INSERT INTO workflow_profiles (model_id, name, avg_success_rate, avg_steps, typical_tools_json, deleted_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL)",
                         params![
                             row.model_id,
                             row.name,
@@ -152,7 +158,7 @@ impl HistoryStore {
         self.conn
             .call(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT id, model_id, name, avg_success_rate, avg_steps, typical_tools_json FROM workflow_profiles WHERE model_id = ?1 ORDER BY avg_success_rate DESC, id ASC",
+                    "SELECT id, model_id, name, avg_success_rate, avg_steps, typical_tools_json FROM workflow_profiles WHERE model_id = ?1 AND deleted_at IS NULL ORDER BY avg_success_rate DESC, id ASC",
                 )?;
                 let rows = stmt.query_map(params![model_id], |row| {
                     Ok(WorkflowProfileRow {

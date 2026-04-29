@@ -440,6 +440,9 @@ declare global {
         dbListSnapshotIndex?: (workspaceId?: string | null) => Promise<unknown[]>;
         dbUpsertAgentEvent?: (eventRow: unknown) => Promise<boolean>;
         dbListAgentEvents?: (opts?: { category?: string | null; paneId?: string | null; limit?: number | null }) => Promise<unknown[]>;
+        dbListDatabaseTables?: () => Promise<unknown[]>;
+        dbQueryDatabaseRows?: (opts: { tableName: string; offset?: number; limit?: number }) => Promise<unknown>;
+        dbUpdateDatabaseRows?: (tableName: string, updates: unknown[]) => Promise<{ updatedRows?: number; error?: string } | unknown>;
         startTerminalSession?: (options: {
             paneId: string;
             sessionId?: string | null;

@@ -55,6 +55,9 @@ pub struct HistoryStore {
     worm_dir: PathBuf,
 }
 
+mod database_viewer;
+pub(crate) use database_viewer::{DatabaseRowUpdate, DatabaseTablePage, DatabaseTableSummary};
+
 pub struct ManagedHistoryRecord {
     pub execution_id: String,
     pub session_id: String,

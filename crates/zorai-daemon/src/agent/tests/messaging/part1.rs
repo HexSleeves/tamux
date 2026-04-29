@@ -46,15 +46,17 @@ fn direct_message_entrypoints_box_large_send_message_futures() {
 
     assert!(
         messaging_production.contains(
-            "self.send_message_inner(thread_id, content, None, None, None, None, None, None, true)"
+            "self.send_message_inner(\n            thread_id, content, None, None, None, None, None, None, None, true,"
+        ) || messaging_production.contains(
+            "self.send_message_inner(thread_id, content, None, None, None, None, None, None, None, true)"
         ),
         "operator-facing send_message should mark Copilot initiator as user"
     );
     assert!(
         messaging_production.contains(
-            "self.send_message_inner(\n            thread_id, content, None, None, None, None, None, None, false,"
+            "self.send_message_inner(\n            thread_id, content, None, None, None, None, None, None, None, false,"
         ) || messaging_production.contains(
-            "self.send_message_inner(thread_id, content, None, None, None, None, None, None, false)"
+            "self.send_message_inner(thread_id, content, None, None, None, None, None, None, None, false)"
         ),
         "internal send_message helper should mark Copilot initiator as agent"
     );
@@ -1409,7 +1411,9 @@ async fn hydrated_thread_message_preserves_cost() {
     let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
     engine.hydrate().await.expect("hydrate");
 
-    let threads = engine.threads.read().await;
-    let thread = threads.get(thread_id).expect("thread should exist");
+    let thread = engine
+        .get_thread(thread_id)
+        .await
+        .expect("thread should exist");
     assert_eq!(thread.messages[0].cost, Some(0.0042));
 }

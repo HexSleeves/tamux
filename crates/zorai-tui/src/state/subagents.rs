@@ -77,6 +77,11 @@ pub const SUBAGENT_ROLE_PRESETS: &[SubAgentRolePreset] = &[
         system_prompt: "You are a research specialist. Gather relevant code and runtime context, compare options, identify constraints, and return clear conclusions with supporting evidence.",
     },
     SubAgentRolePreset {
+        id: "executor",
+        label: "Executor / Performer",
+        system_prompt: "You are an execution specialist. Carry assigned work through to completion, make concrete progress, coordinate dependencies, and report blockers with exact next actions.",
+    },
+    SubAgentRolePreset {
         id: "testing",
         label: "Testing",
         system_prompt: "You are a testing specialist. Design focused verification, find reproducible failure cases, validate fixes, and call out remaining risks or missing coverage.",
@@ -95,6 +100,16 @@ pub const SUBAGENT_ROLE_PRESETS: &[SubAgentRolePreset] = &[
         id: "refactoring",
         label: "Refactoring",
         system_prompt: "You are a refactoring specialist. Improve structure and maintainability without changing behavior, preserve intent, and keep edits scoped and defensible.",
+    },
+    SubAgentRolePreset {
+        id: "technical",
+        label: "Technical",
+        system_prompt: "You are a technical task specialist. Handle engineering, systems, debugging, architecture, and implementation work with precise assumptions, evidence, and verification.",
+    },
+    SubAgentRolePreset {
+        id: "non_technical",
+        label: "Non-Technical",
+        system_prompt: "You are a non-technical task specialist. Handle writing, coordination, analysis, planning, and operational tasks with clear structure, practical outcomes, and stakeholder-ready summaries.",
     },
 ];
 
@@ -178,14 +193,14 @@ pub fn role_picker_choice(index: usize) -> Option<RolePickerChoice> {
 }
 
 pub fn role_picker_index_for_id(id: &str) -> Option<usize> {
-    let normalized = id.trim();
+    let normalized = normalize_role_preset_id(id);
     SUBAGENT_ROLE_PRESETS
         .iter()
-        .position(|preset| preset.id.eq_ignore_ascii_case(normalized))
+        .position(|preset| preset.id.eq_ignore_ascii_case(normalized.as_str()))
         .or_else(|| {
             BUILTIN_PERSONA_ROLE_CHOICES
                 .iter()
-                .position(|choice| choice.id.eq_ignore_ascii_case(normalized))
+                .position(|choice| choice.id.eq_ignore_ascii_case(normalized.as_str()))
                 .map(|index| SUBAGENT_ROLE_PRESETS.len() + index)
         })
 }
@@ -262,7 +277,39 @@ impl SubAgentEditorState {
 }
 
 pub fn find_role_preset(id: &str) -> Option<&'static SubAgentRolePreset> {
-    SUBAGENT_ROLE_PRESETS.iter().find(|preset| preset.id == id)
+    let normalized = normalize_role_preset_id(id);
+    SUBAGENT_ROLE_PRESETS
+        .iter()
+        .find(|preset| preset.id == normalized)
+}
+
+fn normalize_role_preset_id(id: &str) -> String {
+    match id.trim().to_ascii_lowercase().as_str() {
+        "performer" => "executor".to_string(),
+        normalized => normalized.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{find_role_preset, role_picker_index_for_id, SUBAGENT_ROLE_PRESETS};
+
+    #[test]
+    fn role_presets_include_execution_and_task_scope_roles() {
+        let ids: Vec<&str> = SUBAGENT_ROLE_PRESETS
+            .iter()
+            .map(|preset| preset.id)
+            .collect();
+
+        assert!(ids.contains(&"executor"));
+        assert!(ids.contains(&"technical"));
+        assert!(ids.contains(&"non_technical"));
+        assert_eq!(
+            find_role_preset("executor").map(|preset| preset.label),
+            Some("Executor / Performer")
+        );
+        assert!(role_picker_index_for_id("non_technical").is_some());
+    }
 }
 
 /// TUI-side sub-agent entry mirroring the daemon's SubAgentDefinition.

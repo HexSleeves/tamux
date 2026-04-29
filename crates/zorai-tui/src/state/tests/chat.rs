@@ -1432,6 +1432,58 @@ fn thread_detail_refresh_preserves_finalized_stream_after_stale_user_snapshot() 
 }
 
 #[test]
+fn thread_detail_reload_with_short_tail_does_not_wipe_existing_messages() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 4,
+        loaded_message_start: 0,
+        loaded_message_end: 4,
+        messages: (0..4)
+            .map(|index| AgentMessage {
+                id: Some(format!("msg-{index}")),
+                role: MessageRole::Assistant,
+                content: format!("existing {index}"),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    }));
+
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Test".into(),
+        total_message_count: 1,
+        loaded_message_start: 0,
+        loaded_message_end: 1,
+        messages: vec![AgentMessage {
+            id: Some("msg-new".into()),
+            role: MessageRole::User,
+            content: "new prompt after reload".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    let thread = state
+        .threads()
+        .iter()
+        .find(|thread| thread.id == "t1")
+        .expect("thread should exist");
+    let ids = thread
+        .messages
+        .iter()
+        .filter_map(|message| message.id.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec!["msg-0", "msg-1", "msg-2", "msg-3", "msg-new"],
+        "short reload snapshots should not replace already loaded history"
+    );
+}
+
+#[test]
 fn empty_thread_detail_does_not_wipe_existing_messages() {
     let mut state = ChatState::new();
     state.reduce(ChatAction::ThreadDetailReceived(AgentThread {

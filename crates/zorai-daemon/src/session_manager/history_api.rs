@@ -75,6 +75,16 @@ impl SessionManager {
         self.history.list_messages(thread_id, limit).await
     }
 
+    pub async fn list_agent_messages_with_deleted(
+        &self,
+        thread_id: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<AgentDbMessage>> {
+        self.history
+            .list_messages_with_deleted(thread_id, limit)
+            .await
+    }
+
     pub async fn upsert_transcript_index(&self, entry: &TranscriptIndexEntry) -> Result<()> {
         self.history.upsert_transcript_index(entry).await
     }
@@ -109,6 +119,31 @@ impl SessionManager {
     ) -> Result<Vec<AgentEventRow>> {
         self.history
             .list_agent_events(category, pane_id, limit)
+            .await
+    }
+
+    pub async fn list_database_tables(&self) -> Result<Vec<DatabaseTableSummary>> {
+        self.history.list_database_tables().await
+    }
+
+    pub async fn query_database_table_rows(
+        &self,
+        table_name: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<DatabaseTablePage> {
+        self.history
+            .query_database_table_rows(table_name, offset, limit)
+            .await
+    }
+
+    pub async fn update_database_table_rows(
+        &self,
+        table_name: &str,
+        updates: Vec<DatabaseRowUpdate>,
+    ) -> Result<usize> {
+        self.history
+            .update_database_table_rows(table_name, updates)
             .await
     }
 

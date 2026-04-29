@@ -175,4 +175,7 @@ pub enum DaemonMessage {
     AgentWorkspaceNotice { notice: WorkspaceNotice },
     AgentWorkspaceNoticeList { workspace_id: String, notices: Vec<WorkspaceNotice> },
     AgentWorkspaceError { message: String },
+    DatabaseTables { tables_json: String },
+    DatabaseRows { rows_json: String },
+    DatabaseUpdateAck { updated_rows: usize },
 }

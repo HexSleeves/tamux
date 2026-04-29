@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::ffi::OsStr;
 use std::path::PathBuf;
 #[cfg(test)]
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 #[cfg(test)]
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -19,9 +19,6 @@ const MAX_NORMALIZED_SKILL_QUERY_CHARS: usize = 160;
 const LOCAL_SKILL_DISCOVERY_NORMALIZER_ID: &str = "local-skill-discovery-heuristic";
 pub(crate) const SKILL_DISCOVERY_WORKER_ARG: &str = "__zorai-skill-discovery-worker";
 const ZORAI_DAEMON_BIN_ENV: &str = "ZORAI_DAEMON_BIN";
-
-#[cfg(test)]
-static FORCE_MESH_DISCOVERY_DEGRADED_FOR_TESTS: AtomicBool = AtomicBool::new(false);
 
 pub(crate) struct SkillPreflightContext {
     pub prompt_context: String,
@@ -311,6 +308,32 @@ impl AgentEngine {
         )
         .await;
         let cfg = self.config.read().await.skill_recommendation.clone();
+
+        #[cfg(test)]
+        if self.skill_discovery_test_runner.get().is_none() {
+            let mut state = build_latest_skill_discovery_state(
+                content,
+                &execute_skill_discovery_backend(
+                    self.force_mesh_discovery_degraded_for_tests
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                    &self.history,
+                    &self.history.data_dir().to_path_buf(),
+                    content,
+                    &context_tags,
+                    MAX_SKILL_PREFLIGHT_MATCHES,
+                    &cfg,
+                )
+                .await?
+                .0,
+            );
+            if let Some(previous_state) = previous_state.as_ref() {
+                preserve_noncompliant_mesh_state(previous_state, &mut state);
+            }
+            self.set_thread_skill_discovery_state(thread_id, state.clone())
+                .await;
+            return Ok(Some(build_skill_preflight_context_from_state(state)));
+        }
+
         let mut pending_state = build_pending_skill_discovery_state(content);
         if let Some(previous_state) = previous_state.as_ref() {
             preserve_noncompliant_mesh_state(previous_state, &mut pending_state);
@@ -482,6 +505,11 @@ impl AgentEngine {
         .await;
         let cfg = self.config.read().await.skill_recommendation.clone();
         let (result, mut backend_used, mesh_degraded) = execute_skill_discovery_backend(
+            #[cfg(test)]
+            self.force_mesh_discovery_degraded_for_tests
+                .load(std::sync::atomic::Ordering::SeqCst),
+            #[cfg(not(test))]
+            false,
             &self.history,
             &skills_root,
             query,
@@ -501,6 +529,11 @@ impl AgentEngine {
                 Some((normalized_query, normalizer_agent_id)) => {
                     let (mut normalized_result, normalized_backend_used, normalized_mesh_degraded) =
                         execute_skill_discovery_backend(
+                            #[cfg(test)]
+                            self.force_mesh_discovery_degraded_for_tests
+                                .load(std::sync::atomic::Ordering::SeqCst),
+                            #[cfg(not(test))]
+                            false,
                             &self.history,
                             &skills_root,
                             &normalized_query,
@@ -701,6 +734,7 @@ impl AgentEngine {
 }
 
 async fn execute_skill_discovery_backend(
+    #[allow(unused_variables)] force_mesh_degraded_for_tests: bool,
     history: &HistoryStore,
     skills_root: &PathBuf,
     query: &str,
@@ -714,7 +748,7 @@ async fn execute_skill_discovery_backend(
 )> {
     if cfg.discovery_backend.eq_ignore_ascii_case("mesh") {
         #[cfg(test)]
-        if FORCE_MESH_DISCOVERY_DEGRADED_FOR_TESTS.load(Ordering::SeqCst) {
+        if force_mesh_degraded_for_tests {
             let mut fallback = super::skill_recommendation::discover_local_skills(
                 history,
                 skills_root,
@@ -864,6 +898,7 @@ async fn compute_async_skill_discovery_completion(
         };
     let skills_root = history.data_dir().to_path_buf();
     match execute_skill_discovery_backend(
+        false,
         &history,
         &skills_root,
         &request.query,
@@ -1885,19 +1920,29 @@ mod tests {
     }
 
     #[cfg(test)]
-    struct MeshDegradedGuard(bool);
+    struct MeshDegradedGuard<'a> {
+        engine: &'a AgentEngine,
+        previous: bool,
+    }
 
     #[cfg(test)]
-    impl Drop for MeshDegradedGuard {
+    impl Drop for MeshDegradedGuard<'_> {
         fn drop(&mut self) {
-            FORCE_MESH_DISCOVERY_DEGRADED_FOR_TESTS.store(self.0, Ordering::SeqCst);
+            self.engine
+                .force_mesh_discovery_degraded_for_tests
+                .store(self.previous, std::sync::atomic::Ordering::SeqCst);
         }
     }
 
     #[cfg(test)]
-    fn force_mesh_discovery_degraded_for_tests(value: bool) -> MeshDegradedGuard {
-        let previous = FORCE_MESH_DISCOVERY_DEGRADED_FOR_TESTS.swap(value, Ordering::SeqCst);
-        MeshDegradedGuard(previous)
+    fn force_mesh_discovery_degraded_for_tests(
+        engine: &AgentEngine,
+        value: bool,
+    ) -> MeshDegradedGuard<'_> {
+        let previous = engine
+            .force_mesh_discovery_degraded_for_tests
+            .swap(value, std::sync::atomic::Ordering::SeqCst);
+        MeshDegradedGuard { engine, previous }
     }
 
     #[test]
@@ -2041,7 +2086,6 @@ triggers: [panic, failing test]
     #[tokio::test]
     async fn run_skill_discovery_falls_back_when_mesh_is_degraded() {
         let _lock = mesh_discovery_test_lock().lock().await;
-        let _guard = force_mesh_discovery_degraded_for_tests(true);
         let root = tempdir().expect("tempdir");
         let manager = SessionManager::new_test(root.path()).await;
         write_skill(
@@ -2054,6 +2098,7 @@ triggers: [panic, failing test]
         config.skill_recommendation.discovery_backend = "mesh".to_string();
 
         let engine = AgentEngine::new_test(manager, config, root.path()).await;
+        let _guard = force_mesh_discovery_degraded_for_tests(engine.as_ref(), true);
         let computation = engine
             .run_skill_discovery("debug panic in rust service", None, 3)
             .await
