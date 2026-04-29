@@ -72,6 +72,10 @@ pub(super) enum DbBridgeCommand {
         table_name: String,
         offset: usize,
         limit: usize,
+        #[serde(default)]
+        sort_column: Option<String>,
+        #[serde(default)]
+        sort_direction: Option<String>,
     },
     UpdateDatabaseRows {
         table_name: String,

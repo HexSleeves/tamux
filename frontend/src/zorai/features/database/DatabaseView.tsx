@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { buildDatabaseRowUpdates, databaseDraftKey, displayDatabaseValue, isBlobPlaceholder, normalizeDatabasePageSize } from "./databaseModel";
+import { buildDatabaseRowUpdates, databaseDraftKey, displayDatabaseValue, getNextDatabaseSort, isBlobPlaceholder, normalizeDatabasePageSize } from "./databaseModel";
 import { listDatabaseTables, queryDatabaseRows, updateDatabaseRows } from "./databaseBridge";
-import type { DatabaseTablePage, DatabaseTableSummary } from "./databaseTypes";
+import type { DatabaseSortState, DatabaseTablePage, DatabaseTableSummary } from "./databaseTypes";
 
 type DatabaseViewProps = {
   activeTable: string | null;
@@ -64,10 +64,12 @@ export function DatabaseView({ activeTable }: DatabaseViewProps) {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [sort, setSort] = useState<DatabaseSortState | null>(null);
 
   useEffect(() => {
     setOffset(0);
     setDrafts({});
+    setSort(null);
   }, [activeTable]);
 
   useEffect(() => {
@@ -75,7 +77,7 @@ export function DatabaseView({ activeTable }: DatabaseViewProps) {
     let cancelled = false;
     setLoading(true);
     setStatus(null);
-    queryDatabaseRows(activeTable, offset, pageSize)
+    queryDatabaseRows(activeTable, offset, pageSize, sort)
       .then((nextPage) => {
         if (!cancelled) setPage(nextPage);
       })
@@ -91,7 +93,7 @@ export function DatabaseView({ activeTable }: DatabaseViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeTable, offset, pageSize]);
+  }, [activeTable, offset, pageSize, sort]);
 
   const updates = useMemo(() => buildDatabaseRowUpdates(page, drafts), [page, drafts]);
   const dirtyCount = updates.reduce((total, update) => total + Object.keys(update.values).length, 0);
@@ -105,7 +107,7 @@ export function DatabaseView({ activeTable }: DatabaseViewProps) {
     try {
       const updatedRows = await updateDatabaseRows(activeTable, updates);
       setDrafts({});
-      const nextPage = await queryDatabaseRows(activeTable, offset, pageSize);
+      const nextPage = await queryDatabaseRows(activeTable, offset, pageSize, sort);
       setPage(nextPage);
       setStatus(`Pushed ${updatedRows} row${updatedRows === 1 ? "" : "s"}.`);
     } catch (error: any) {
@@ -158,7 +160,21 @@ export function DatabaseView({ activeTable }: DatabaseViewProps) {
               <th>rowid</th>
               {page?.columns.map((column) => (
                 <th key={column.name}>
-                  <span>{column.name}</span>
+                  <button
+                    type="button"
+                    className="zorai-database-sort-button"
+                    onClick={() => {
+                      setSort((current) => getNextDatabaseSort(current, column.name));
+                      setOffset(0);
+                      setDrafts({});
+                    }}
+                    title={`Sort by ${column.name}`}
+                  >
+                    <span>{column.name}</span>
+                    <span className="zorai-database-sort-icon" aria-hidden="true">
+                      {sort?.column === column.name ? (sort.direction === "desc" ? "⌄" : "⌃") : ""}
+                    </span>
+                  </button>
                   <small>{column.primaryKey ? "PK" : column.declaredType || "value"}</small>
                 </th>
               ))}

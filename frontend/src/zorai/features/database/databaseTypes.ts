@@ -32,3 +32,10 @@ export type DatabaseRowUpdate = {
   rowid: number;
   values: Record<string, unknown>;
 };
+
+export type DatabaseSortDirection = "asc" | "desc";
+
+export type DatabaseSortState = {
+  column: string;
+  direction: DatabaseSortDirection;
+};

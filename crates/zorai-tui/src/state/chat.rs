@@ -199,6 +199,64 @@ fn message_snapshot_matches(existing: &AgentMessage, incoming: &AgentMessage) ->
     }
 }
 
+fn content_blocks_match(left: &[AgentContentBlock], right: &[AgentContentBlock]) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+
+    left.iter()
+        .zip(right.iter())
+        .all(|(left, right)| match (left, right) {
+            (AgentContentBlock::Text { text: left }, AgentContentBlock::Text { text: right }) => {
+                left == right
+            }
+            (
+                AgentContentBlock::Image {
+                    url: left_url,
+                    data_url: left_data_url,
+                    mime_type: left_mime_type,
+                },
+                AgentContentBlock::Image {
+                    url: right_url,
+                    data_url: right_data_url,
+                    mime_type: right_mime_type,
+                },
+            )
+            | (
+                AgentContentBlock::Audio {
+                    url: left_url,
+                    data_url: left_data_url,
+                    mime_type: left_mime_type,
+                },
+                AgentContentBlock::Audio {
+                    url: right_url,
+                    data_url: right_data_url,
+                    mime_type: right_mime_type,
+                },
+            ) => {
+                left_url == right_url
+                    && left_data_url == right_data_url
+                    && left_mime_type == right_mime_type
+            }
+            _ => false,
+        })
+}
+
+fn is_optimistic_echo_of_persisted_tail(existing: &AgentMessage, incoming: &AgentMessage) -> bool {
+    if !((existing.id.is_some() && incoming.id.is_none())
+        || (existing.id.is_none() && incoming.id.is_some()))
+    {
+        return false;
+    }
+
+    existing.role == incoming.role
+        && existing.content == incoming.content
+        && existing.message_kind == incoming.message_kind
+        && existing.tool_call_id == incoming.tool_call_id
+        && existing.tool_name == incoming.tool_name
+        && content_blocks_match(&existing.content_blocks, &incoming.content_blocks)
+}
+
 fn overlapping_thread_messages_match(existing: &AgentThread, incoming: &AgentThread) -> bool {
     let existing_start = existing.loaded_message_start;
     let existing_end = existing
@@ -315,6 +373,13 @@ fn trim_thread_to_latest_page(thread: &mut AgentThread, page_size: usize) -> usi
 
 fn append_message_to_thread(thread: &mut AgentThread, message: AgentMessage, page_size: usize) {
     normalize_thread_window(thread);
+    if thread
+        .messages
+        .last()
+        .is_some_and(|existing| is_optimistic_echo_of_persisted_tail(existing, &message))
+    {
+        return;
+    }
     thread.messages.push(message);
     thread.active_context_window_start = None;
     thread.active_context_window_end = None;

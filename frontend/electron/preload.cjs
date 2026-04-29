@@ -341,4 +341,3 @@ const bridgeApi = {
 };
 
 contextBridge.exposeInMainWorld('zorai', bridgeApi);
-contextBridge.exposeInMainWorld('zorai', bridgeApi);

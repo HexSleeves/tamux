@@ -164,6 +164,8 @@ function registerDbIpcHandlers(ipcMain, runtime) {
                 table_name: typeof opts.tableName === 'string' ? opts.tableName : '',
                 offset: Number.isFinite(opts.offset) ? Math.max(0, Math.trunc(opts.offset)) : 0,
                 limit: Number.isFinite(opts.limit) ? Math.max(1, Math.trunc(opts.limit)) : 100,
+                sort_column: typeof opts.sortColumn === 'string' ? opts.sortColumn : null,
+                sort_direction: opts.sortDirection === 'asc' || opts.sortDirection === 'desc' ? opts.sortDirection : null,
             }, 'database-rows');
         } catch {
             return null;

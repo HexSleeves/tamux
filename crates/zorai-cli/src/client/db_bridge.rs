@@ -113,8 +113,8 @@ pub async fn run_db_bridge() -> Result<()> {
                             DbBridgeCommand::ListDatabaseTables => {
                                 framed.send(ClientMessage::ListDatabaseTables).await?;
                             }
-                            DbBridgeCommand::QueryDatabaseRows { table_name, offset, limit } => {
-                                framed.send(ClientMessage::QueryDatabaseRows { table_name, offset, limit }).await?;
+                            DbBridgeCommand::QueryDatabaseRows { table_name, offset, limit, sort_column, sort_direction } => {
+                                framed.send(ClientMessage::QueryDatabaseRows { table_name, offset, limit, sort_column, sort_direction }).await?;
                             }
                             DbBridgeCommand::UpdateDatabaseRows { table_name, updates_json } => {
                                 framed.send(ClientMessage::UpdateDatabaseRows { table_name, updates_json }).await?;

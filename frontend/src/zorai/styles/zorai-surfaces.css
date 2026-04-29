@@ -132,6 +132,28 @@
   margin-top: 3px;
 }
 
+.zorai-database-sort-button {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 0;
+  text-align: left;
+}
+
+.zorai-database-sort-icon {
+  min-width: 16px;
+  color: var(--zorai-accent);
+  text-align: center;
+}
+
 .zorai-database-rowid {
   color: var(--zorai-muted);
   padding: 8px !important;

@@ -551,7 +551,7 @@ async fn replace_thread_snapshot_does_not_regress_to_stale_snapshot() -> Result<
 }
 
 #[tokio::test]
-async fn reconcile_thread_snapshot_updates_changed_messages_and_prunes_removed_ones() -> Result<()>
+async fn reconcile_thread_snapshot_updates_changed_messages_without_pruning_missing_ones() -> Result<()>
 {
     let (store, root) = make_test_store().await?;
     let thread_id = "thread-reconcile-snapshot";
@@ -675,26 +675,15 @@ async fn reconcile_thread_snapshot_updates_changed_messages_and_prunes_removed_o
         .await?;
 
     let pruned_messages = store.list_messages(thread_id, None).await?;
-    assert_eq!(pruned_messages.len(), 1);
-    assert_eq!(pruned_messages[0].id, "m1");
-    let pruned_with_trash = store.list_messages_with_deleted(thread_id, None).await?;
     assert_eq!(
-        pruned_with_trash
+        pruned_messages
             .iter()
             .map(|message| message.id.as_str())
             .collect::<Vec<_>>(),
         vec!["m1", "m2"],
-        "snapshot pruning should soft-delete removed messages instead of hard-deleting them"
+        "reconcile snapshots may be partial and must not tombstone omitted messages"
     );
-    assert_eq!(store.restore_messages(thread_id, &["m2"]).await?, 1);
-    let restored_messages = store.list_messages(thread_id, None).await?;
-    assert_eq!(
-        restored_messages
-            .iter()
-            .map(|message| message.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["m1", "m2"]
-    );
+    assert_eq!(store.restore_messages(thread_id, &["m2"]).await?, 0);
 
     fs::remove_dir_all(root)?;
     Ok(())

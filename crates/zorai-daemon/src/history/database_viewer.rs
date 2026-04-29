@@ -89,8 +89,12 @@ impl HistoryStore {
         table_name: &str,
         offset: usize,
         limit: usize,
+        sort_column: Option<&str>,
+        sort_direction: Option<&str>,
     ) -> Result<DatabaseTablePage> {
         let table_name = table_name.to_string();
+        let sort_column = sort_column.map(str::to_string);
+        let sort_direction = sort_direction.map(str::to_string);
         let limit = limit.clamp(1, 500);
         self.read_conn
             .call(move |conn: &mut Connection| {
@@ -109,12 +113,13 @@ impl HistoryStore {
                     .map(|column| quote_identifier(&column.name))
                     .collect::<Vec<_>>()
                     .join(", ");
+                let order_by = build_order_clause(&schema, sort_column.as_deref(), sort_direction.as_deref())?;
                 let select_sql = if schema.editable {
                     format!(
-                        "SELECT rowid AS __zorai_rowid, {column_list} FROM {quoted_table} LIMIT ?1 OFFSET ?2"
+                        "SELECT rowid AS __zorai_rowid, {column_list} FROM {quoted_table}{order_by} LIMIT ?1 OFFSET ?2"
                     )
                 } else {
-                    format!("SELECT {column_list} FROM {quoted_table} LIMIT ?1 OFFSET ?2")
+                    format!("SELECT {column_list} FROM {quoted_table}{order_by} LIMIT ?1 OFFSET ?2")
                 };
                 let mut stmt = conn.prepare(&select_sql)?;
                 let mut result_rows = stmt.query(rusqlite::params![limit as i64, offset as i64])?;
@@ -250,6 +255,43 @@ fn table_has_rowid(conn: &Connection, table_name: &str) -> bool {
         quote_identifier(table_name)
     ))
     .is_ok()
+}
+
+fn build_order_clause(
+    schema: &TableSchema,
+    sort_column: Option<&str>,
+    sort_direction: Option<&str>,
+) -> std::result::Result<String, tokio_rusqlite::Error> {
+    let Some(sort_column) = sort_column.filter(|column| !column.trim().is_empty()) else {
+        return Ok(String::new());
+    };
+    if !schema
+        .columns
+        .iter()
+        .any(|column| column.name == sort_column)
+    {
+        return Err(tokio_rusqlite::Error::Rusqlite(
+            rusqlite::Error::InvalidParameterName(format!("unknown sort column: {sort_column}")),
+        ));
+    }
+    let direction = match sort_direction
+        .unwrap_or("desc")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "asc" => "ASC",
+        "desc" => "DESC",
+        other => {
+            return Err(tokio_rusqlite::Error::Rusqlite(
+                rusqlite::Error::InvalidParameterName(format!("unknown sort direction: {other}")),
+            ));
+        }
+    };
+    let tie_breaker = if schema.editable { ", rowid ASC" } else { "" };
+    Ok(format!(
+        " ORDER BY {} {direction}{tie_breaker}",
+        quote_identifier(sort_column)
+    ))
 }
 
 fn quote_identifier(identifier: &str) -> String {

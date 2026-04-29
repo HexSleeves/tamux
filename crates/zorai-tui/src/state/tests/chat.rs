@@ -1052,6 +1052,49 @@ fn append_message_replaces_previous_concierge_welcome() {
 }
 
 #[test]
+fn append_message_does_not_duplicate_persisted_optimistic_user_tail() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Thread".into(),
+        total_message_count: 1,
+        loaded_message_start: 0,
+        loaded_message_end: 1,
+        messages: vec![AgentMessage {
+            id: Some("persisted-user".into()),
+            role: MessageRole::User,
+            content: "same prompt".into(),
+            timestamp: 100,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    state.reduce(ChatAction::AppendMessage {
+        thread_id: "t1".into(),
+        message: AgentMessage {
+            role: MessageRole::User,
+            content: "same prompt".into(),
+            timestamp: 101,
+            ..Default::default()
+        },
+    });
+
+    let thread = state
+        .threads()
+        .iter()
+        .find(|thread| thread.id == "t1")
+        .expect("thread should exist");
+    assert_eq!(
+        thread.messages.len(),
+        1,
+        "optimistic user echo should collapse into the persisted message"
+    );
+    assert_eq!(thread.total_message_count, 1);
+    assert_eq!(thread.messages[0].id.as_deref(), Some("persisted-user"));
+}
+
+#[test]
 fn dismiss_concierge_welcome_removes_only_welcome_messages() {
     let mut state = ChatState::new();
     state.reduce(ChatAction::ThreadCreated {

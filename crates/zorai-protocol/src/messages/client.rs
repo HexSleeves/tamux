@@ -231,6 +231,6 @@ pub enum ClientMessage {
     AgentSubmitWorkspaceReview { review: WorkspaceReviewSubmission },
     AgentListWorkspaceNotices { workspace_id: String, #[serde(default)] task_id: Option<String> },
     ListDatabaseTables,
-    QueryDatabaseRows { table_name: String, offset: usize, limit: usize },
+    QueryDatabaseRows { table_name: String, offset: usize, limit: usize, #[serde(default)] sort_column: Option<String>, #[serde(default)] sort_direction: Option<String> },
     UpdateDatabaseRows { table_name: String, updates_json: String },
 }

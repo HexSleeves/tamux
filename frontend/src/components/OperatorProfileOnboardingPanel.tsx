@@ -137,6 +137,11 @@ export function OperatorProfileOnboardingPanel() {
             <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
               Field: <code>{question.field_key}</code> • {question.optional ? "optional" : "recommended"}
             </div>
+            {operatorProfile.loading ? (
+              <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+                Saving answer...
+              </div>
+            ) : null}
 
             {inputKind === "bool" ? (
               <div style={{ display: "flex", gap: 8 }}>
@@ -226,7 +231,7 @@ export function OperatorProfileOnboardingPanel() {
               style={primaryButtonStyle}
               disabled={!canSubmit || operatorProfile.loading}
             >
-              Submit
+              {operatorProfile.loading ? "Submitting" : "Submit"}
             </button>
           </div>
         </div>

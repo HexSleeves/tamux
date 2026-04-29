@@ -131,9 +131,11 @@ impl SessionManager {
         table_name: &str,
         offset: usize,
         limit: usize,
+        sort_column: Option<&str>,
+        sort_direction: Option<&str>,
     ) -> Result<DatabaseTablePage> {
         self.history
-            .query_database_table_rows(table_name, offset, limit)
+            .query_database_table_rows(table_name, offset, limit, sort_column, sort_direction)
             .await
     }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildDatabaseRowUpdates, normalizeDatabasePageSize } from "./databaseModel";
+import { buildDatabaseRowUpdates, getNextDatabaseSort, normalizeDatabasePageSize } from "./databaseModel";
 import type { DatabaseTablePage } from "./databaseTypes";
 
 const page: DatabaseTablePage = {
@@ -37,5 +37,21 @@ describe("databaseModel", () => {
     expect(normalizeDatabasePageSize(undefined)).toBe(100);
     expect(normalizeDatabasePageSize(0)).toBe(1);
     expect(normalizeDatabasePageSize(9999)).toBe(500);
+  });
+
+  it("cycles column sorting from none to descending to ascending and back to none", () => {
+    expect(getNextDatabaseSort(null, "created_at")).toEqual({
+      column: "created_at",
+      direction: "desc",
+    });
+    expect(getNextDatabaseSort({ column: "created_at", direction: "desc" }, "created_at")).toEqual({
+      column: "created_at",
+      direction: "asc",
+    });
+    expect(getNextDatabaseSort({ column: "created_at", direction: "asc" }, "created_at")).toBeNull();
+    expect(getNextDatabaseSort({ column: "name", direction: "desc" }, "created_at")).toEqual({
+      column: "created_at",
+      direction: "desc",
+    });
   });
 });

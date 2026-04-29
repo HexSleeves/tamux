@@ -145,7 +145,8 @@ export function isOperatorProfileSessionCompleted(
   return Boolean(
     value
     && typeof value === "object"
-    && typeof (value as OperatorProfileSessionCompleted).session_id === "string",
+    && typeof (value as OperatorProfileSessionCompleted).session_id === "string"
+    && Array.isArray((value as OperatorProfileSessionCompleted).updated_fields),
   );
 }
 

@@ -1,4 +1,4 @@
-import type { DatabaseRowUpdate, DatabaseTablePage } from "./databaseTypes";
+import type { DatabaseRowUpdate, DatabaseSortState, DatabaseTablePage } from "./databaseTypes";
 
 export const DEFAULT_DATABASE_PAGE_SIZE = 100;
 export const MAX_DATABASE_PAGE_SIZE = 500;
@@ -10,6 +10,12 @@ export function normalizeDatabasePageSize(value: number | undefined): number {
 
 export function databaseDraftKey(rowid: number, columnName: string): string {
   return `${rowid}:${columnName}`;
+}
+
+export function getNextDatabaseSort(current: DatabaseSortState | null, column: string): DatabaseSortState | null {
+  if (!current || current.column !== column) return { column, direction: "desc" };
+  if (current.direction === "desc") return { column, direction: "asc" };
+  return null;
 }
 
 export function displayDatabaseValue(value: unknown): string {

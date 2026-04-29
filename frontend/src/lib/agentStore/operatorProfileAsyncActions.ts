@@ -7,6 +7,7 @@ import {
   isOperatorProfileSessionCompleted,
   isOperatorProfileSessionStarted,
   parseOperatorProfileSummary,
+  type OperatorProfileQuestion,
 } from "./operatorProfile";
 import type { AgentState, AgentStoreGet, AgentStoreSet } from "./storeTypes";
 
@@ -54,12 +55,26 @@ function setOperatorProfileCompleted(set: AgentStoreSet): void {
   }));
 }
 
+function isOperatorProfileAck(value: unknown): value is { ok: true } {
+  return Boolean(value && typeof value === "object" && (value as { ok?: unknown }).ok === true);
+}
+
 export function createOperatorProfileAsyncActions(
   set: AgentStoreSet,
   get: AgentStoreGet,
 ): Pick<AgentState, OperatorProfileAsyncActionKeys> {
+  let operatorProfileSessionStartPromise: Promise<OperatorProfileQuestion | null> | null = null;
+
   return {
     startOperatorProfileSession: async (kind = "first_run_onboarding") => {
+      if (operatorProfileSessionStartPromise) {
+        return operatorProfileSessionStartPromise;
+      }
+      const current = get().operatorProfile;
+      if (current.loading) {
+        return current.question;
+      }
+      operatorProfileSessionStartPromise = (async () => {
       const bridge = getBridge();
       if (!bridge?.agentStartOperatorProfileSession) {
         setOperatorProfileError(set, "Operator profile bridge not available");
@@ -104,6 +119,12 @@ export function createOperatorProfileAsyncActions(
       } catch (error) {
         setOperatorProfileError(set, error);
         return null;
+      }
+      })();
+      try {
+        return await operatorProfileSessionStartPromise;
+      } finally {
+        operatorProfileSessionStartPromise = null;
       }
     },
     fetchNextOperatorProfileQuestion: async (sessionId) => {
@@ -179,6 +200,9 @@ export function createOperatorProfileAsyncActions(
           }));
           return;
         }
+        if (isOperatorProfileAck(response)) {
+          return;
+        }
         if (!isOperatorProfileProgress(response)) {
           setOperatorProfileLoading(set, false, "Unexpected operator profile progress response");
           return;
@@ -230,6 +254,9 @@ export function createOperatorProfileAsyncActions(
           }));
           return;
         }
+        if (isOperatorProfileAck(response)) {
+          return;
+        }
         if (!isOperatorProfileProgress(response)) {
           setOperatorProfileLoading(set, false, "Unexpected operator profile progress response");
           return;
@@ -279,6 +306,9 @@ export function createOperatorProfileAsyncActions(
               question: response,
             },
           }));
+          return;
+        }
+        if (isOperatorProfileAck(response)) {
           return;
         }
         if (!isOperatorProfileProgress(response)) {
@@ -391,7 +421,7 @@ export function createOperatorProfileAsyncActions(
     },
     maybeStartOperatorProfileOnboarding: async () => {
       const current = get().operatorProfile;
-      if (current.sessionId || current.question) {
+      if (current.loading || current.sessionId || current.question) {
         return;
       }
       const bridge = getBridge();
@@ -406,6 +436,10 @@ export function createOperatorProfileAsyncActions(
             panelOpen: false,
           },
         }));
+        return;
+      }
+      const next = get().operatorProfile;
+      if (next.loading || next.sessionId || next.question) {
         return;
       }
       await get().startOperatorProfileSession("first_run_onboarding");

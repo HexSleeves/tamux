@@ -34,7 +34,7 @@ async fn database_viewer_lists_queries_and_updates_table_rows() {
     assert!(table.editable);
 
     let page = store
-        .query_database_table_rows("database_viewer_items", 0, 100)
+        .query_database_table_rows("database_viewer_items", 0, 100, None, None)
         .await
         .expect("query viewer table");
     assert_eq!(page.total_rows, 2);
@@ -61,11 +61,70 @@ async fn database_viewer_lists_queries_and_updates_table_rows() {
         .expect("update changed column");
 
     let page = store
-        .query_database_table_rows("database_viewer_items", 0, 100)
+        .query_database_table_rows("database_viewer_items", 0, 100, None, None)
         .await
         .expect("query updated viewer table");
     assert_eq!(page.rows[0].values["name"], serde_json::json!("alpha"));
     assert_eq!(page.rows[0].values["priority"], serde_json::json!(7));
+
+    fs::remove_dir_all(root).expect("cleanup history root");
+}
+
+#[tokio::test]
+async fn database_viewer_sorts_rows_by_selected_column() {
+    let (store, root) = make_test_store().await.expect("create history store");
+
+    store
+        .conn
+        .call(|conn| {
+            conn.execute(
+                "CREATE TABLE database_viewer_sort_items (id INTEGER PRIMARY KEY, name TEXT NOT NULL, priority INTEGER)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO database_viewer_sort_items (name, priority) VALUES ('alpha', 2), ('charlie', 3), ('bravo', 1)",
+                [],
+            )?;
+            Ok(())
+        })
+        .await
+        .expect("seed sorted table");
+
+    let desc = store
+        .query_database_table_rows(
+            "database_viewer_sort_items",
+            0,
+            100,
+            Some("priority"),
+            Some("desc"),
+        )
+        .await
+        .expect("query descending rows");
+    assert_eq!(
+        desc.rows
+            .iter()
+            .map(|row| row.values["name"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        ["charlie", "alpha", "bravo"],
+    );
+
+    let asc = store
+        .query_database_table_rows(
+            "database_viewer_sort_items",
+            0,
+            100,
+            Some("name"),
+            Some("asc"),
+        )
+        .await
+        .expect("query ascending rows");
+    assert_eq!(
+        asc.rows
+            .iter()
+            .map(|row| row.values["name"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        ["alpha", "bravo", "charlie"],
+    );
 
     fs::remove_dir_all(root).expect("cleanup history root");
 }

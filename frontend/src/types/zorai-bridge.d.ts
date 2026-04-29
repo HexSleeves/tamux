@@ -441,7 +441,7 @@ declare global {
         dbUpsertAgentEvent?: (eventRow: unknown) => Promise<boolean>;
         dbListAgentEvents?: (opts?: { category?: string | null; paneId?: string | null; limit?: number | null }) => Promise<unknown[]>;
         dbListDatabaseTables?: () => Promise<unknown[]>;
-        dbQueryDatabaseRows?: (opts: { tableName: string; offset?: number; limit?: number }) => Promise<unknown>;
+        dbQueryDatabaseRows?: (opts: { tableName: string; offset?: number; limit?: number; sortColumn?: string | null; sortDirection?: "asc" | "desc" | null }) => Promise<unknown>;
         dbUpdateDatabaseRows?: (tableName: string, updates: unknown[]) => Promise<{ updatedRows?: number; error?: string } | unknown>;
         startTerminalSession?: (options: {
             paneId: string;
@@ -622,7 +622,6 @@ declare global {
     };
 
     interface Window {
-        zorai?: ZoraiBridge;
         zorai?: ZoraiBridge;
     }
 }

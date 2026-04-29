@@ -242,24 +242,6 @@ impl HistoryStore {
                 }
                 drop(existing_stmt);
 
-                let incoming_ids = messages
-                    .iter()
-                    .map(|message| message.id.clone())
-                    .collect::<std::collections::HashSet<_>>();
-                let preserve_existing_prefix_before = messages
-                    .iter()
-                    .map(|message| message.created_at)
-                    .min()
-                    .filter(|_| {
-                        let existing_latest_created_at = existing_messages
-                            .values()
-                            .map(|message| message.created_at)
-                            .max()
-                            .unwrap_or(0);
-                        incoming_latest_created_at > existing_latest_created_at
-                            && incoming_message_count < existing_messages.len() as i64
-                    });
-
                 let changed_messages =
                     messages_requiring_search_reindex(&existing_messages, &messages);
                 for message in &changed_messages {
@@ -284,34 +266,6 @@ impl HistoryStore {
                             message.metadata_json,
                         ],
                     )?;
-                }
-
-                let stale_ids = existing_messages
-                    .iter()
-                    .filter(|(id, message)| {
-                        !incoming_ids.contains(*id)
-                            && preserve_existing_prefix_before
-                                .map(|cutoff| message.created_at >= cutoff)
-                                .unwrap_or(true)
-                    })
-                    .map(|(id, _)| id)
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if !stale_ids.is_empty() {
-                    let placeholders =
-                        std::iter::repeat_n("?", stale_ids.len()).collect::<Vec<_>>().join(", ");
-                    let sql = format!(
-                        "UPDATE agent_messages SET deleted_at = ? WHERE thread_id = ? AND deleted_at IS NULL AND id IN ({placeholders})"
-                    );
-                    let mut params: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
-                    params.push(Box::new(now_millis_i64()));
-                    params.push(Box::new(thread.id.clone()));
-                    for id in stale_ids {
-                        params.push(Box::new(id));
-                    }
-                    let refs: Vec<&dyn rusqlite::types::ToSql> =
-                        params.iter().map(|value| value.as_ref()).collect();
-                    transaction.execute(&sql, refs.as_slice())?;
                 }
 
                 if messages.is_empty() {

@@ -1,5 +1,5 @@
 import { getBridge } from "@/lib/bridge";
-import type { DatabaseTablePage, DatabaseTableSummary, DatabaseRowUpdate } from "./databaseTypes";
+import type { DatabaseTablePage, DatabaseTableSummary, DatabaseRowUpdate, DatabaseSortState } from "./databaseTypes";
 
 function toCamelTable(raw: any): DatabaseTableSummary {
   return {
@@ -42,9 +42,15 @@ export async function listDatabaseTables(): Promise<DatabaseTableSummary[]> {
   return Array.isArray(rows) ? rows.map(toCamelTable).filter((table) => table.name) : [];
 }
 
-export async function queryDatabaseRows(tableName: string, offset: number, limit: number): Promise<DatabaseTablePage | null> {
+export async function queryDatabaseRows(tableName: string, offset: number, limit: number, sort: DatabaseSortState | null = null): Promise<DatabaseTablePage | null> {
   const bridge = getBridge();
-  const page = await bridge?.dbQueryDatabaseRows?.({ tableName, offset, limit });
+  const page = await bridge?.dbQueryDatabaseRows?.({
+    tableName,
+    offset,
+    limit,
+    sortColumn: sort?.column ?? null,
+    sortDirection: sort?.direction ?? null,
+  });
   return toCamelPage(page);
 }
 

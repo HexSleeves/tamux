@@ -44,16 +44,49 @@ test("operator profile session start uses a startup-tolerant bridge timeout", as
   ]);
 });
 
-test("operator profile answer actions accept next-question frames before progress", async () => {
-  const { handlers, queries } = createHandlerHarness();
+test("operator profile answer actions send commands without waiting on query timeouts", async () => {
+  const handlers = new Map();
+  const commands = [];
+  const queries = [];
+  const ipcMain = {
+    handle(name, handler) {
+      handlers.set(name, handler);
+    },
+  };
 
-  await handlers.get("agent-submit-operator-profile-answer")(null, "s1", "q1", "true");
-  await handlers.get("agent-skip-operator-profile-question")(null, "s1", "q1", "skip");
-  await handlers.get("agent-defer-operator-profile-question")(null, "s1", "q1", 123);
+  registerAgentIpcHandlers(
+    ipcMain,
+    {
+      sendAgentCommand: (command) => commands.push(command),
+      sendAgentQuery: async (...args) => {
+        queries.push(args);
+        return { ok: true };
+      },
+    },
+    {
+      logToFile: () => {},
+      openAICodexAuthHandlers: {
+        status: async () => ({ available: false }),
+        login: async () => ({ available: false }),
+        logout: async () => ({ ok: true }),
+      },
+    },
+  );
 
-  assert.deepEqual(queries.map((query) => query[1]), [
-    ["operator-profile-question", "operator-profile-progress", "operator-profile-session-completed"],
-    ["operator-profile-question", "operator-profile-progress", "operator-profile-session-completed"],
-    ["operator-profile-question", "operator-profile-progress", "operator-profile-session-completed"],
+  await assert.doesNotReject(
+    handlers.get("agent-submit-operator-profile-answer")(null, "s1", "q1", "true"),
+  );
+  await assert.doesNotReject(
+    handlers.get("agent-skip-operator-profile-question")(null, "s1", "q1", "skip"),
+  );
+  await assert.doesNotReject(
+    handlers.get("agent-defer-operator-profile-question")(null, "s1", "q1", 123),
+  );
+
+  assert.deepEqual(commands, [
+    { type: "submit-operator-profile-answer", session_id: "s1", question_id: "q1", answer_json: "true" },
+    { type: "skip-operator-profile-question", session_id: "s1", question_id: "q1", reason: "skip" },
+    { type: "defer-operator-profile-question", session_id: "s1", question_id: "q1", defer_until_unix_ms: 123 },
   ]);
+  assert.deepEqual(queries, []);
 });
