@@ -315,7 +315,7 @@ pub(super) async fn apply_memory_update(
         ));
     }
 
-    if matches!(mode, MemoryUpdateMode::Append | MemoryUpdateMode::Replace) {
+    if mode == MemoryUpdateMode::Append {
         let contradictions = detect_memory_contradictions(&existing, trimmed);
         if !contradictions.is_empty() {
             let repaired = repair_memory_contradictions(

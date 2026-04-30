@@ -156,6 +156,35 @@ async fn conflicting_memory_update_records_conflict_provenance_relationship() ->
 }
 
 #[tokio::test]
+async fn replace_memory_update_sizes_replacement_not_old_plus_new() -> Result<()> {
+    let root = std::env::temp_dir().join(format!("zorai-memory-test-{}", Uuid::new_v4()));
+    let history = HistoryStore::new_test_store(&root).await?;
+    ensure_memory_files(&root).await?;
+    let memory_path = active_memory_dir(&root).join(MemoryTarget::Memory.file_name());
+    let existing = format!(
+        "# Memory\n- shell: bash\n{}",
+        "existing stable context\n".repeat(160)
+    );
+    tokio::fs::write(&memory_path, existing).await?;
+
+    let replacement = "# Memory\n- shell: zsh\n- editor: helix\n";
+    let result = apply_memory_update(
+        &root,
+        &history,
+        MemoryTarget::Memory,
+        MemoryUpdateMode::Replace,
+        replacement,
+        test_write_context(),
+    )
+    .await?;
+
+    assert!(result.contains("replace mode"), "{result}");
+    let final_content = tokio::fs::read_to_string(&memory_path).await?;
+    assert_eq!(final_content, replacement.trim());
+    Ok(())
+}
+
+#[tokio::test]
 async fn user_append_while_reconciling_stages_without_conflicting_file_write() -> Result<()> {
     let _guard = acquire_user_sync_test_guard();
     let root = std::env::temp_dir().join(format!("zorai-memory-test-{}", Uuid::new_v4()));
