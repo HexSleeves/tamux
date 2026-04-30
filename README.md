@@ -187,7 +187,7 @@ Zorai supports voice workflows in both TUI and desktop app.
 - **Settings persistence:** daemon config `extra.audio_*`
 
 ## Community
-- 🗨️ Discord: [Join us!](https://discord.gg/xkZjncAX)
+- 🗨️ Discord: [Join us!](https://discord.gg/QVXkqaNSUS)
 
 ## Read More
 
