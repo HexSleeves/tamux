@@ -117,7 +117,7 @@ fn detect_sunk_cost(bias: &CognitiveBias, input: &IntrospectionInput) -> Option<
             .iter()
             .any(|tool| tool == &input.proposed_tool_name);
     let repeated_loop = known_tool_match && input.predicted_repeat_count >= repeat_limit;
-    let failure_loop = same_tool_failures >= repeat_limit as usize;
+    let failure_loop = known_tool_match && same_tool_failures >= repeat_limit as usize;
     let retry_loop = known_tool_match && input.task_retry_count >= repeat_limit;
 
     if !(repeated_loop || failure_loop || retry_loop) {
@@ -404,4 +404,57 @@ fn contains_positive_evidence(summary: &str) -> bool {
     ]
     .iter()
     .any(|needle| normalized.contains(needle))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sunk_cost_does_not_block_unconfigured_tool_after_revised_failures() {
+        let self_model = SelfModel::default();
+        let input = IntrospectionInput {
+            proposed_tool_name: "update_memory".to_string(),
+            proposed_tool_arguments: serde_json::json!({
+                "target": "memory",
+                "mode": "append",
+                "content": "- A smaller revised durable fact"
+            })
+            .to_string(),
+            normalized_tool_signature: "update_memory:{\"content\":\"- A smaller revised durable fact\",\"mode\":\"append\",\"target\":\"memory\"}".to_string(),
+            predicted_repeat_count: 1,
+            recent_tool_outcomes: vec![
+                RecentToolOutcome {
+                    tool_name: "update_memory".to_string(),
+                    outcome: "failure".to_string(),
+                    summary: "MEMORY.md would exceed its limit (4200 > 3600 chars)."
+                        .to_string(),
+                },
+                RecentToolOutcome {
+                    tool_name: "update_memory".to_string(),
+                    outcome: "failure".to_string(),
+                    summary: "MEMORY.md would exceed its limit (3900 > 3600 chars)."
+                        .to_string(),
+                },
+                RecentToolOutcome {
+                    tool_name: "update_memory".to_string(),
+                    outcome: "failure".to_string(),
+                    summary: "MEMORY.md would exceed its limit (3650 > 3600 chars)."
+                        .to_string(),
+                },
+            ],
+            task_retry_count: 0,
+            decision_reasoning: Some("Use the smaller revised memory content.".to_string()),
+        };
+
+        let outcome = introspect(&self_model, &input);
+
+        assert!(
+            outcome
+                .signals
+                .iter()
+                .all(|signal| signal.bias_name != "sunk_cost"),
+            "revised update_memory attempts should be validated by the memory tool, not blocked as sunk-cost"
+        );
+    }
 }
