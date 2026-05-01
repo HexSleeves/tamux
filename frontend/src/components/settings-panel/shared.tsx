@@ -383,7 +383,10 @@ export function ModelSelector({ providerId, value, customName, onChange, disable
 
             if (result && typeof result === "object") {
                 if ("models" in result && Array.isArray(result.models)) {
-                    setFetchedModels(result.models.map((model: unknown) => normalizeFetchedRemoteModel(model)));
+                    const normalizedModels = result.models.map((model: unknown) => normalizeFetchedRemoteModel(model));
+                    setFetchedModels(remoteModelFilter
+                        ? normalizedModels.filter(remoteModelFilter)
+                        : normalizedModels);
                 } else if ("error" in result && typeof result.error === "string") {
                     setFetchError(result.error);
                 }
@@ -393,7 +396,7 @@ export function ModelSelector({ providerId, value, customName, onChange, disable
         } finally {
             setIsFetching(false);
         }
-    }, [providerId, fetchBaseUrl, fetchApiKey, fetchOutputModalities]);
+    }, [providerId, fetchBaseUrl, fetchApiKey, fetchOutputModalities, remoteModelFilter]);
 
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {

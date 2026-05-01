@@ -158,15 +158,19 @@ fn build_openai_chat_completions_body(
     messages: &[ApiMessage],
     tools: &[ToolDefinition],
 ) -> Result<serde_json::Value> {
-    let include_openrouter_reasoning_content =
-        provider == zorai_shared::providers::PROVIDER_ID_OPENROUTER;
-    let synthesize_missing_tool_reasoning_content = include_openrouter_reasoning_content
+    let include_tool_reasoning_content =
+        chat_completions_replays_tool_reasoning_content(provider);
+    let include_non_tool_reasoning_content =
+        chat_completions_replays_non_tool_reasoning_content(provider);
+    let synthesize_missing_tool_reasoning_content =
+        provider == zorai_shared::providers::PROVIDER_ID_OPENROUTER
         && normalize_reasoning_effort(&config.reasoning_effort).is_some();
     let all_messages = build_chat_completion_messages_with_options(
         system_prompt,
         messages,
-        include_openrouter_reasoning_content,
+        include_tool_reasoning_content,
         synthesize_missing_tool_reasoning_content,
+        include_non_tool_reasoning_content,
     )?;
 
     let mut body = serde_json::json!({
@@ -213,6 +217,18 @@ fn build_openai_chat_completions_body(
 
     apply_openrouter_provider_routing(provider, config, &mut body);
     Ok(body)
+}
+
+fn chat_completions_replays_tool_reasoning_content(provider: &str) -> bool {
+    matches!(
+        provider,
+        zorai_shared::providers::PROVIDER_ID_OPENROUTER
+            | zorai_shared::providers::PROVIDER_ID_DEEPSEEK
+    )
+}
+
+fn chat_completions_replays_non_tool_reasoning_content(provider: &str) -> bool {
+    provider == zorai_shared::providers::PROVIDER_ID_OPENROUTER
 }
 
 fn messages_to_responses_input(

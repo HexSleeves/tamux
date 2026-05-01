@@ -145,14 +145,30 @@ function readPath(record: Record<string, unknown>, path: string[]): unknown {
   return current;
 }
 
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function modelMetadataRecord(
+  model: Pick<FetchedRemoteModel, "metadata"> | null | undefined,
+): Record<string, unknown> | null {
+  const record = objectRecord(model?.metadata);
+  if (!record) {
+    return null;
+  }
+  const nested = objectRecord(record.metadata);
+  return nested ? { ...record, ...nested } : record;
+}
+
 export function embeddingDimensionsFromFetchedModel(
   model: Pick<FetchedRemoteModel, "metadata"> | null | undefined,
 ): number | null {
-  const metadata = model?.metadata;
-  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+  const record = modelMetadataRecord(model);
+  if (!record) {
     return null;
   }
-  const record = metadata as Record<string, unknown>;
   const directPaths = [
     ["settings", "dimensions"],
     ["settings", "dimension"],
@@ -305,14 +321,11 @@ function modelMetadataContainsAudio(
   model: FetchedRemoteModel,
   endpoint: "stt" | "tts",
 ): boolean {
-  const value = model.metadata;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = modelMetadataRecord(model);
+  if (!record) {
     return false;
   }
-  const record = value as Record<string, unknown>;
-  const architecture = record.architecture && typeof record.architecture === "object" && !Array.isArray(record.architecture)
-    ? record.architecture as Record<string, unknown>
-    : null;
+  const architecture = objectRecord(record.architecture);
 
   const inputAudio = jsonArrayContainsAudio(
     architecture?.input_modalities ?? record.input_modalities,
@@ -348,14 +361,11 @@ export function filterFetchedModelsForAudio(
 }
 
 function modelMetadataContainsImage(model: FetchedRemoteModel): boolean {
-  const value = model.metadata;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = modelMetadataRecord(model);
+  if (!record) {
     return false;
   }
-  const record = value as Record<string, unknown>;
-  const architecture = record.architecture && typeof record.architecture === "object" && !Array.isArray(record.architecture)
-    ? record.architecture as Record<string, unknown>
-    : null;
+  const architecture = objectRecord(record.architecture);
 
   return Boolean(
     jsonArrayContainsModality(architecture?.input_modalities ?? record.input_modalities, "image")
@@ -382,14 +392,11 @@ function fetchedModelEmbeddingNameOverride(model: FetchedRemoteModel): boolean {
 }
 
 function modelMetadataContainsEmbedding(model: FetchedRemoteModel): boolean {
-  const value = model.metadata;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const record = modelMetadataRecord(model);
+  if (!record) {
     return fetchedModelEmbeddingNameOverride(model);
   }
-  const record = value as Record<string, unknown>;
-  const architecture = record.architecture && typeof record.architecture === "object" && !Array.isArray(record.architecture)
-    ? record.architecture as Record<string, unknown>
-    : null;
+  const architecture = objectRecord(record.architecture);
 
   return Boolean(
     jsonArrayContainsEmbedding(architecture?.output_modalities ?? record.output_modalities)

@@ -640,14 +640,15 @@ fn build_chat_completion_messages(
     system_prompt: &str,
     messages: &[ApiMessage],
 ) -> Result<Vec<serde_json::Value>> {
-    build_chat_completion_messages_with_options(system_prompt, messages, false, false)
+    build_chat_completion_messages_with_options(system_prompt, messages, false, false, false)
 }
 
 fn build_chat_completion_messages_with_options(
     system_prompt: &str,
     messages: &[ApiMessage],
-    include_reasoning_content: bool,
+    include_tool_reasoning_content: bool,
     synthesize_missing_tool_reasoning_content: bool,
+    include_non_tool_reasoning_content: bool,
 ) -> Result<Vec<serde_json::Value>> {
     let messages = sanitize_api_messages(messages);
 
@@ -675,7 +676,7 @@ fn build_chat_completion_messages_with_options(
                 "tool_calls".to_string(),
                 serde_json::to_value(message.tool_calls.clone().unwrap_or_default())?,
             );
-            if include_reasoning_content {
+            if include_tool_reasoning_content {
                 insert_reasoning_content(
                     &mut obj,
                     message.reasoning.as_deref(),
@@ -684,7 +685,7 @@ fn build_chat_completion_messages_with_options(
             }
         } else {
             obj.insert("content".to_string(), api_content_to_json(&message.content));
-            if include_reasoning_content && message.role == "assistant" {
+            if include_non_tool_reasoning_content && message.role == "assistant" {
                 insert_reasoning_content(&mut obj, message.reasoning.as_deref(), false);
             }
             if let Some(tool_call_id) = &message.tool_call_id {

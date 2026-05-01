@@ -167,6 +167,40 @@ test("filterFetchedModelsForAudio keeps coarse audio pricing from leaking stt-on
   ]);
 });
 
+test("filterFetchedModelsForAudio reads daemon-nested model metadata", () => {
+  const models = [
+    normalizeFetchedRemoteModel({
+      id: "openai/gpt-audio",
+      name: "OpenAI: GPT Audio",
+      metadata: {
+        architecture: {
+          modality: "text+audio->text+audio",
+          input_modalities: ["text", "audio"],
+          output_modalities: ["text", "audio"],
+        },
+      },
+    }),
+    normalizeFetchedRemoteModel({
+      id: "openai/gpt-4o",
+      name: "OpenAI: GPT-4o",
+      metadata: {
+        architecture: {
+          modality: "text->text",
+          input_modalities: ["text"],
+          output_modalities: ["text"],
+        },
+      },
+    }),
+  ];
+
+  expect(filterFetchedModelsForAudio(models, "stt").map((model) => model.id)).toEqual([
+    "openai/gpt-audio",
+  ]);
+  expect(filterFetchedModelsForAudio(models, "tts").map((model) => model.id)).toEqual([
+    "openai/gpt-audio",
+  ]);
+});
+
 test("filterFetchedModelsForImageGeneration keeps image-capable models only", () => {
   const models = [
     normalizeFetchedRemoteModel({

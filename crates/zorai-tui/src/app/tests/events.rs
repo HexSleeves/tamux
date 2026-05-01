@@ -6469,6 +6469,93 @@ fn follow_up_prompt_keeps_thinking_across_reload_after_stale_thread_detail_repla
 }
 
 #[test]
+fn follow_up_prompt_deduplicates_latest_page_when_wire_start_is_missing() {
+    let (mut model, _daemon_rx) = make_model_with_daemon_rx();
+    model.connected = true;
+    model.handle_client_event(ClientEvent::ThreadDetail(Some(crate::wire::AgentThread {
+        id: "thread-user".to_string(),
+        title: "User Thread".to_string(),
+        messages: vec![
+            crate::wire::AgentMessage {
+                id: Some("msg-118".to_string()),
+                role: crate::wire::MessageRole::User,
+                content: "Earlier question".to_string(),
+                timestamp: 118,
+                message_kind: "normal".to_string(),
+                ..Default::default()
+            },
+            crate::wire::AgentMessage {
+                id: Some("msg-119".to_string()),
+                role: crate::wire::MessageRole::Assistant,
+                content: "Earlier answer".to_string(),
+                timestamp: 119,
+                message_kind: "normal".to_string(),
+                ..Default::default()
+            },
+        ],
+        total_message_count: 120,
+        loaded_message_end: 120,
+        ..Default::default()
+    })));
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-user".to_string()));
+
+    model.submit_prompt("follow-up question".to_string());
+    assert_eq!(model.footer_activity_text().as_deref(), Some("thinking"));
+
+    model.handle_client_event(ClientEvent::ThreadDetail(Some(crate::wire::AgentThread {
+        id: "thread-user".to_string(),
+        title: "User Thread".to_string(),
+        messages: vec![
+            crate::wire::AgentMessage {
+                id: Some("msg-118".to_string()),
+                role: crate::wire::MessageRole::User,
+                content: "Earlier question".to_string(),
+                timestamp: 118,
+                message_kind: "normal".to_string(),
+                ..Default::default()
+            },
+            crate::wire::AgentMessage {
+                id: Some("msg-119".to_string()),
+                role: crate::wire::MessageRole::Assistant,
+                content: "Earlier answer".to_string(),
+                timestamp: 119,
+                message_kind: "normal".to_string(),
+                ..Default::default()
+            },
+            crate::wire::AgentMessage {
+                id: Some("msg-120".to_string()),
+                role: crate::wire::MessageRole::User,
+                content: "follow-up question".to_string(),
+                timestamp: 120,
+                message_kind: "normal".to_string(),
+                ..Default::default()
+            },
+        ],
+        total_message_count: 121,
+        loaded_message_end: 121,
+        ..Default::default()
+    })));
+
+    let thread = model
+        .chat
+        .active_thread()
+        .expect("thread should stay active");
+    assert_eq!(
+        thread
+            .messages
+            .iter()
+            .filter(|message| message.role == chat::MessageRole::User
+                && message.content == "follow-up question")
+            .count(),
+        1,
+        "persisted latest-page echo should replace the optimistic prompt"
+    );
+    assert_eq!(model.footer_activity_text().as_deref(), Some("thinking"));
+}
+
+#[test]
 fn follow_up_prompt_keeps_reasoning_stream_across_reload_before_first_response() {
     let (mut model, _daemon_rx) = make_model_with_daemon_rx();
     model.connected = true;
