@@ -54,8 +54,6 @@ fn ensure_provider_auth_schema(conn: &Connection) -> Result<()> {
             deleted_at  INTEGER,
             PRIMARY KEY (provider_id, auth_mode)
         );
-        CREATE INDEX IF NOT EXISTS idx_provider_auth_state_updated
-        ON provider_auth_state(deleted_at, updated_at DESC);
         ",
     )?;
     conn.execute(
@@ -63,6 +61,12 @@ fn ensure_provider_auth_schema(conn: &Connection) -> Result<()> {
         [],
     )
     .ok();
+    conn.execute_batch(
+        "
+        CREATE INDEX IF NOT EXISTS idx_provider_auth_state_updated
+        ON provider_auth_state(deleted_at, updated_at DESC);
+        ",
+    )?;
     Ok(())
 }
 

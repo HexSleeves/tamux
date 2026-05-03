@@ -1,0 +1,498 @@
+use ratatui::prelude::*;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, List, ListItem, Paragraph};
+
+use zorai_protocol::{AGENT_NAME_RAROG, AGENT_NAME_SWAROG};
+
+use crate::state::chat::{AgentThread, ChatState};
+use crate::state::modal::{ModalState, ThreadPickerTab};
+use crate::state::subagents::SubAgentsState;
+use crate::state::task::TaskState;
+use crate::state::workspace::WorkspaceState;
+use crate::theme::ThemeTokens;
+use crate::widgets::token_format::format_token_count;
+
+const TAB_GAP: u16 = 1;
+const INTERNAL_DM_THREAD_PREFIX: &str = "dm:";
+const INTERNAL_DM_TITLE_PREFIX: &str = "Internal DM";
+const HIDDEN_HANDOFF_THREAD_PREFIX: &str = "handoff:";
+const GOAL_THREAD_PREFIX: &str = "goal:";
+const WORKSPACE_THREAD_PREFIX: &str = "workspace-thread:";
+const PLAYGROUND_THREAD_PREFIX: &str = "playground:";
+const PLAYGROUND_THREAD_TITLE_PREFIX: &str = "Participant Playground";
+const WELES_THREAD_TITLE: &str = "WELES";
+const GATEWAY_THREAD_TITLE_PREFIXES: [&str; 4] = ["slack ", "discord ", "telegram ", "whatsapp "];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ThreadPickerHitTarget {
+    Tab(ThreadPickerTab),
+    Item(usize),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ThreadPickerTabSpec {
+    pub(crate) tab: ThreadPickerTab,
+    pub(crate) label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ThreadPickerTabCell {
+    tab: ThreadPickerTab,
+    label: String,
+    start: u16,
+}
+
+#[derive(Debug, Clone, Default)]
+struct GoalThreadIndex {
+    ids: std::collections::BTreeSet<String>,
+}
+
+impl GoalThreadIndex {
+    fn from_tasks(tasks: &TaskState) -> Self {
+        let ids = tasks.all_goal_thread_ids().into_iter().collect();
+        Self { ids }
+    }
+
+    fn contains_id(&self, thread_id: &str) -> bool {
+        self.ids.contains(thread_id)
+    }
+
+    fn contains_thread(&self, thread: &AgentThread) -> bool {
+        is_goal_thread(thread) || self.contains_id(&thread.id)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+struct WorkspaceThreadIndex {
+    ids: std::collections::BTreeSet<String>,
+}
+
+impl WorkspaceThreadIndex {
+    fn from_workspace(workspace: &WorkspaceState, tasks: &TaskState) -> Self {
+        let mut ids = workspace
+            .all_runtime_thread_ids()
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>();
+        for goal_run_id in workspace.all_runtime_goal_run_ids() {
+            if let Some(run) = tasks.goal_run_by_id(&goal_run_id) {
+                for thread_id in run
+                    .active_thread_id
+                    .iter()
+                    .chain(run.root_thread_id.iter())
+                    .chain(run.thread_id.iter())
+                {
+                    if !thread_id.is_empty() {
+                        ids.insert(thread_id.clone());
+                    }
+                }
+                for thread_id in &run.execution_thread_ids {
+                    if !thread_id.is_empty() {
+                        ids.insert(thread_id.clone());
+                    }
+                }
+            }
+            ids.extend(tasks.goal_thread_ids(&goal_run_id));
+        }
+        Self { ids }
+    }
+
+    fn contains_id(&self, thread_id: &str) -> bool {
+        self.ids.contains(thread_id)
+    }
+
+    fn contains_thread(&self, thread: &AgentThread) -> bool {
+        is_workspace_thread(thread) || self.contains_id(&thread.id)
+    }
+}
+
+fn thread_picker_layout(inner: Rect) -> [Rect; 5] {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // tabs
+            Constraint::Length(1), // search
+            Constraint::Length(1), // separator
+            Constraint::Min(1),    // list
+            Constraint::Length(1), // hints
+        ])
+        .split(inner);
+    [chunks[0], chunks[1], chunks[2], chunks[3], chunks[4]]
+}
+
+fn fixed_tab_specs() -> Vec<ThreadPickerTabSpec> {
+    vec![
+        ThreadPickerTabSpec {
+            tab: ThreadPickerTab::Swarog,
+            label: format!("[{AGENT_NAME_SWAROG}]"),
+        },
+        ThreadPickerTabSpec {
+            tab: ThreadPickerTab::Rarog,
+            label: format!("[{AGENT_NAME_RAROG}]"),
+        },
+        ThreadPickerTabSpec {
+            tab: ThreadPickerTab::Weles,
+            label: "[Weles]".to_string(),
+        },
+        ThreadPickerTabSpec {
+            tab: ThreadPickerTab::Goals,
+            label: "[Goals]".to_string(),
+        },
+        ThreadPickerTabSpec {
+            tab: ThreadPickerTab::Workspace,
+            label: "[Workspace]".to_string(),
+        },
+        ThreadPickerTabSpec {
+            tab: ThreadPickerTab::Playgrounds,
+            label: "[Playgrounds]".to_string(),
+        },
+        ThreadPickerTabSpec {
+            tab: ThreadPickerTab::Internal,
+            label: "[Internal]".to_string(),
+        },
+        ThreadPickerTabSpec {
+            tab: ThreadPickerTab::Gateway,
+            label: "[Gateway]".to_string(),
+        },
+    ]
+}
+
+fn normalize_agent_tab_id(value: &str) -> Option<String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "" | "svarog" | "swarog" | "main" | "rarog" | "concierge" | "weles" => None,
+        other => Some(other.to_string()),
+    }
+}
+
+fn display_name_for_agent_id(
+    agent_id: &str,
+    chat: &ChatState,
+    subagents: &SubAgentsState,
+) -> String {
+    if let Some(entry) = subagents.entries.iter().find(|entry| {
+        entry.id.eq_ignore_ascii_case(agent_id)
+            || entry
+                .id
+                .strip_suffix("_builtin")
+                .is_some_and(|alias| alias.eq_ignore_ascii_case(agent_id))
+    }) {
+        return entry.name.clone();
+    }
+
+    chat.threads()
+        .iter()
+        .filter_map(|thread| thread.agent_name.as_deref())
+        .find(|name| name.eq_ignore_ascii_case(agent_id))
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| {
+            let mut chars = agent_id.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => agent_id.to_string(),
+            }
+        })
+}
+
+fn tab_specs_inner(
+    chat: &ChatState,
+    subagents: &SubAgentsState,
+    goal_index: Option<&GoalThreadIndex>,
+    workspace_index: Option<&WorkspaceThreadIndex>,
+) -> Vec<ThreadPickerTabSpec> {
+    let mut specs = fixed_tab_specs();
+    let mut dynamic_agents = std::collections::BTreeSet::new();
+
+    for entry in &subagents.entries {
+        if !entry.builtin {
+            if let Some(agent_id) = normalize_agent_tab_id(&entry.id) {
+                dynamic_agents.insert(agent_id);
+            }
+        }
+    }
+
+    for thread in chat.threads() {
+        if is_hidden_handoff_thread(thread)
+            || is_internal_thread(thread)
+            || is_gateway_thread(thread)
+            || is_workspace_thread_with_index(thread, workspace_index)
+            || is_goal_thread_with_index(thread, goal_index)
+            || is_playground_thread(thread)
+            || is_rarog_thread(thread)
+            || is_weles_thread(thread)
+        {
+            continue;
+        }
+
+        if let Some(agent_name) = thread.agent_name.as_deref() {
+            if let Some(agent_id) = normalize_agent_tab_id(agent_name) {
+                dynamic_agents.insert(agent_id);
+            }
+        }
+    }
+
+    specs.extend(
+        dynamic_agents
+            .into_iter()
+            .map(|agent_id| ThreadPickerTabSpec {
+                label: format!(
+                    "[{}]",
+                    display_name_for_agent_id(&agent_id, chat, subagents)
+                ),
+                tab: ThreadPickerTab::Agent(agent_id),
+            }),
+    );
+    specs
+}
+
+#[cfg(test)]
+pub(crate) fn tab_specs(chat: &ChatState, subagents: &SubAgentsState) -> Vec<ThreadPickerTabSpec> {
+    tab_specs_inner(chat, subagents, None, None)
+}
+
+#[cfg(test)]
+pub(crate) fn tab_specs_for_tasks(
+    chat: &ChatState,
+    subagents: &SubAgentsState,
+    tasks: &TaskState,
+) -> Vec<ThreadPickerTabSpec> {
+    let goal_index = GoalThreadIndex::from_tasks(tasks);
+    tab_specs_inner(chat, subagents, Some(&goal_index), None)
+}
+
+#[cfg(test)]
+pub(crate) fn tab_specs_for_workspace(
+    chat: &ChatState,
+    subagents: &SubAgentsState,
+    tasks: &TaskState,
+    workspace: &WorkspaceState,
+) -> Vec<ThreadPickerTabSpec> {
+    let goal_index = GoalThreadIndex::from_tasks(tasks);
+    let workspace_index = WorkspaceThreadIndex::from_workspace(workspace, tasks);
+    tab_specs_inner(chat, subagents, Some(&goal_index), Some(&workspace_index))
+}
+
+fn thread_matches_agent_tab(
+    thread: &AgentThread,
+    agent_id: &str,
+    subagents: &SubAgentsState,
+    goal_index: Option<&GoalThreadIndex>,
+    workspace_index: Option<&WorkspaceThreadIndex>,
+) -> bool {
+    if is_hidden_handoff_thread(thread)
+        || is_internal_thread(thread)
+        || is_gateway_thread(thread)
+        || is_workspace_thread_with_index(thread, workspace_index)
+        || is_goal_thread_with_index(thread, goal_index)
+        || is_playground_thread(thread)
+        || is_rarog_thread(thread)
+        || is_weles_thread(thread)
+    {
+        return false;
+    }
+
+    let normalized_agent = agent_id.trim().to_ascii_lowercase();
+    thread
+        .agent_name
+        .as_deref()
+        .and_then(normalize_agent_tab_id)
+        .is_some_and(|thread_agent| thread_agent == normalized_agent)
+        || subagents.entries.iter().any(|entry| {
+            normalize_agent_tab_id(&entry.id).is_some_and(|entry_id| entry_id == normalized_agent)
+                && thread
+                    .agent_name
+                    .as_deref()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(&entry.name))
+        })
+}
+
+pub(crate) fn resolve_thread_picker_tab(
+    agent_alias: &str,
+    chat: &ChatState,
+    subagents: &SubAgentsState,
+) -> Option<ThreadPickerTab> {
+    let normalized = agent_alias.trim().to_ascii_lowercase();
+    let fixed = match normalized.as_str() {
+        "svarog" | "swarog" | "main" => Some(ThreadPickerTab::Swarog),
+        "rarog" | "concierge" => Some(ThreadPickerTab::Rarog),
+        "weles" => Some(ThreadPickerTab::Weles),
+        "goals" | "goal" => Some(ThreadPickerTab::Goals),
+        "workspace" | "workspaces" => Some(ThreadPickerTab::Workspace),
+        "playgrounds" | "playground" => Some(ThreadPickerTab::Playgrounds),
+        "internal" => Some(ThreadPickerTab::Internal),
+        "gateway" => Some(ThreadPickerTab::Gateway),
+        _ => None,
+    };
+    if fixed.is_some() {
+        return fixed;
+    }
+
+    if let Some(entry) = subagents.entries.iter().find(|entry| {
+        entry.id.eq_ignore_ascii_case(agent_alias)
+            || entry.name.eq_ignore_ascii_case(agent_alias)
+            || entry
+                .id
+                .strip_suffix("_builtin")
+                .is_some_and(|alias| alias.eq_ignore_ascii_case(agent_alias))
+    }) {
+        if let Some(agent_id) =
+            normalize_agent_tab_id(entry.id.strip_suffix("_builtin").unwrap_or(&entry.id))
+        {
+            return Some(ThreadPickerTab::Agent(agent_id));
+        }
+    }
+
+    chat.threads()
+        .iter()
+        .filter_map(|thread| thread.agent_name.as_deref())
+        .find(|name| name.eq_ignore_ascii_case(agent_alias))
+        .and_then(normalize_agent_tab_id)
+        .map(ThreadPickerTab::Agent)
+}
+
+pub(crate) fn adjacent_thread_picker_tab_for_workspace(
+    current: &ThreadPickerTab,
+    chat: &ChatState,
+    subagents: &SubAgentsState,
+    tasks: &TaskState,
+    workspace: &WorkspaceState,
+    direction: i32,
+) -> ThreadPickerTab {
+    let goal_index = GoalThreadIndex::from_tasks(tasks);
+    let workspace_index = WorkspaceThreadIndex::from_workspace(workspace, tasks);
+    adjacent_thread_picker_tab_inner(
+        current,
+        chat,
+        subagents,
+        Some(&goal_index),
+        Some(&workspace_index),
+        direction,
+    )
+}
+
+fn adjacent_thread_picker_tab_inner(
+    current: &ThreadPickerTab,
+    chat: &ChatState,
+    subagents: &SubAgentsState,
+    goal_index: Option<&GoalThreadIndex>,
+    workspace_index: Option<&WorkspaceThreadIndex>,
+    direction: i32,
+) -> ThreadPickerTab {
+    let specs = tab_specs_inner(chat, subagents, goal_index, workspace_index);
+    let current_index = specs
+        .iter()
+        .position(|spec| &spec.tab == current)
+        .unwrap_or(0);
+    let next_index = if direction < 0 {
+        current_index
+            .checked_sub(1)
+            .unwrap_or(specs.len().saturating_sub(1))
+    } else {
+        (current_index + 1) % specs.len().max(1)
+    };
+    specs
+        .get(next_index)
+        .map(|spec| spec.tab.clone())
+        .unwrap_or_default()
+}
+
+fn thread_matches_query(
+    thread: &AgentThread,
+    query: &str,
+    goal_index: Option<&GoalThreadIndex>,
+    workspace_index: Option<&WorkspaceThreadIndex>,
+) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let lower = query.to_lowercase();
+    thread.title.to_lowercase().contains(&lower)
+        || thread_display_title_inner(thread, goal_index, workspace_index)
+            .to_lowercase()
+            .contains(&lower)
+        || thread
+            .agent_name
+            .as_deref()
+            .is_some_and(|name| name.to_lowercase().contains(&lower))
+}
+
+pub(crate) fn is_rarog_thread(thread: &AgentThread) -> bool {
+    thread.id == "concierge"
+        || thread
+            .agent_name
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case(AGENT_NAME_RAROG))
+        || thread.title.eq_ignore_ascii_case("concierge")
+        || thread.title.starts_with("HEARTBEAT SYNTHESIS")
+        || thread.title.starts_with("Heartbeat check:")
+}
+
+pub(crate) fn is_internal_thread(thread: &AgentThread) -> bool {
+    thread.id.starts_with(INTERNAL_DM_THREAD_PREFIX)
+        || thread.title.starts_with(INTERNAL_DM_TITLE_PREFIX)
+}
+
+pub(crate) fn is_gateway_thread(thread: &AgentThread) -> bool {
+    !is_internal_thread(thread)
+        && GATEWAY_THREAD_TITLE_PREFIXES
+            .iter()
+            .any(|prefix| thread.title.trim().to_ascii_lowercase().starts_with(prefix))
+}
+
+pub(crate) fn is_playground_thread(thread: &AgentThread) -> bool {
+    thread.id.starts_with(PLAYGROUND_THREAD_PREFIX)
+        || thread.title.starts_with(PLAYGROUND_THREAD_TITLE_PREFIX)
+}
+
+pub(crate) fn is_goal_thread(thread: &AgentThread) -> bool {
+    thread.id.starts_with(GOAL_THREAD_PREFIX)
+}
+
+fn is_goal_thread_with_index(thread: &AgentThread, goal_index: Option<&GoalThreadIndex>) -> bool {
+    is_goal_thread(thread) || goal_index.is_some_and(|index| index.contains_thread(thread))
+}
+
+fn is_workspace_thread(thread: &AgentThread) -> bool {
+    thread.id.starts_with(WORKSPACE_THREAD_PREFIX)
+}
+
+fn is_workspace_thread_with_index(
+    thread: &AgentThread,
+    workspace_index: Option<&WorkspaceThreadIndex>,
+) -> bool {
+    is_workspace_thread(thread)
+        || workspace_index.is_some_and(|index| index.contains_thread(thread))
+}
+
+fn is_hidden_handoff_thread(thread: &AgentThread) -> bool {
+    thread.id.starts_with(HIDDEN_HANDOFF_THREAD_PREFIX)
+        || thread
+            .title
+            .trim()
+            .to_ascii_lowercase()
+            .starts_with("handoff ")
+}
+
+pub(crate) fn is_weles_thread(thread: &AgentThread) -> bool {
+    !is_internal_thread(thread)
+        && (thread
+            .agent_name
+            .as_deref()
+            .is_some_and(|name| name.eq_ignore_ascii_case("weles"))
+            || thread.title.contains(WELES_THREAD_TITLE)
+            || thread.messages.iter().any(|message| {
+                message.content.lines().any(|line| {
+                    let Some((marker, value)) = line.split_once(':') else {
+                        return false;
+                    };
+                    if marker.trim() != "Agent persona id" {
+                        return false;
+                    }
+                    matches!(
+                        value.trim().to_ascii_lowercase().as_str(),
+                        "weles" | "governance" | "vitality"
+                    )
+                })
+            }))
+}
+

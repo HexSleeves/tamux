@@ -43,6 +43,7 @@ use crate::state::DaemonCommand;
 const MAX_TRANSIENT_TERMINAL_ERRORS: usize = 5;
 const TERMINAL_ERROR_RETRY_DELAY_MS: u64 = 150;
 const MAX_DAEMON_EVENTS_PER_FRAME: usize = 32;
+const IDLE_TICK_RATE_MULTIPLIER: u32 = 5;
 
 fn build_log_filter(tui_log: Option<&str>, zorai_log: Option<&str>) -> EnvFilter {
     tui_log
@@ -72,6 +73,23 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 
 fn should_retry_terminal_error(consecutive_errors: usize) -> bool {
     consecutive_errors < MAX_TRANSIENT_TERMINAL_ERRORS
+}
+
+fn idle_loop_tick_rate(base_tick: Duration) -> Duration {
+    base_tick.saturating_mul(IDLE_TICK_RATE_MULTIPLIER)
+}
+
+fn loop_tick_rate(model: &TuiModel, base_tick: Duration) -> Duration {
+    if model.wants_fast_tick() {
+        base_tick
+    } else {
+        idle_loop_tick_rate(base_tick)
+    }
+}
+
+fn elapsed_model_ticks(elapsed: Duration, base_tick: Duration) -> u64 {
+    let base_nanos = base_tick.as_nanos().max(1);
+    (elapsed.as_nanos() / base_nanos).max(1) as u64
 }
 
 fn tui_runtime_marker_path() -> io::Result<PathBuf> {
@@ -314,17 +332,21 @@ fn run_loop(
     graphics_renderer: &mut crate::terminal_graphics::TerminalGraphicsRenderer,
     tick_rate: Duration,
 ) -> Result<()> {
-    let mut next_tick = Instant::now() + tick_rate;
+    let mut last_tick = Instant::now();
+    let mut next_tick = last_tick + loop_tick_rate(model, tick_rate);
     let mut terminal_error_streak = 0usize;
     let mut needs_draw = true;
 
     loop {
         let now = Instant::now();
         if now >= next_tick {
-            if model.on_tick() {
+            let elapsed_ticks =
+                elapsed_model_ticks(now.saturating_duration_since(last_tick), tick_rate);
+            if model.on_tick_elapsed(elapsed_ticks) {
                 needs_draw = true;
             }
-            next_tick = now + tick_rate;
+            last_tick = now;
+            next_tick = now + loop_tick_rate(model, tick_rate);
         }
 
         let processed_daemon_events =
@@ -358,6 +380,10 @@ fn run_loop(
         }
 
         let now = Instant::now();
+        let preferred_tick_rate = loop_tick_rate(model, tick_rate);
+        if next_tick.saturating_duration_since(now) > preferred_tick_rate {
+            next_tick = now + preferred_tick_rate;
+        }
         let until_tick = next_tick.saturating_duration_since(now);
         let wait_for = if processed_daemon_events == MAX_DAEMON_EVENTS_PER_FRAME {
             Duration::ZERO
@@ -1289,5 +1315,14 @@ mod tests {
             MAX_TRANSIENT_TERMINAL_ERRORS - 1
         ));
         assert!(!should_retry_terminal_error(MAX_TRANSIENT_TERMINAL_ERRORS));
+    }
+
+    #[test]
+    fn idle_loop_uses_coarser_tick_without_sliding_tick_units() {
+        let base_tick = Duration::from_millis(crate::app::TUI_TICK_RATE_MS);
+
+        assert_eq!(idle_loop_tick_rate(base_tick), base_tick * 5);
+        assert_eq!(elapsed_model_ticks(base_tick, base_tick), 1);
+        assert_eq!(elapsed_model_ticks(base_tick * 5, base_tick), 5);
     }
 }

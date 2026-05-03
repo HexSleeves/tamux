@@ -1,0 +1,93 @@
+pub fn hit_test_for_workspace(
+    area: Rect,
+    chat: &ChatState,
+    modal: &ModalState,
+    subagents: &SubAgentsState,
+    tasks: &TaskState,
+    workspace: &WorkspaceState,
+    mouse: Position,
+) -> Option<ThreadPickerHitTarget> {
+    if !area.contains(mouse) {
+        return None;
+    }
+
+    let inner = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .inner(area);
+    if inner.height < 5 {
+        return None;
+    }
+    let [tabs_row, _, _, list_row, _] = thread_picker_layout(inner);
+    let goal_index = GoalThreadIndex::from_tasks(tasks);
+    let workspace_index = WorkspaceThreadIndex::from_workspace(workspace, tasks);
+
+    if tabs_row.contains(mouse) {
+        let tab_cells = tab_cells_inner(chat, subagents, Some(&goal_index), Some(&workspace_index));
+        let selected_tab = modal.thread_picker_tab();
+        let tab_scroll = tab_scroll_offset(tabs_row.width, &tab_cells, &selected_tab);
+        for (tab, rect, _) in visible_tab_cells(tabs_row, &tab_cells, tab_scroll) {
+            if rect.contains(mouse) {
+                return Some(ThreadPickerHitTarget::Tab(tab));
+            }
+        }
+    }
+
+    if list_row.contains(mouse) {
+        let total_items = filtered_threads_inner(
+            chat,
+            modal,
+            subagents,
+            Some(&goal_index),
+            Some(&workspace_index),
+        )
+        .len()
+            + 1;
+        let row_idx = mouse.y.saturating_sub(list_row.y) as usize;
+        let (visible_start, visible_len) =
+            visible_window(modal.picker_cursor(), total_items, list_row.height as usize);
+        if row_idx < visible_len {
+            return Some(ThreadPickerHitTarget::Item(visible_start + row_idx));
+        }
+    }
+
+    None
+}
+
+/// Format millisecond timestamp as "Xm ago" or "Xh ago" etc.
+fn format_time_ago(updated_at: u64) -> String {
+    if updated_at == 0 {
+        return String::new();
+    }
+    let now = now_millis();
+    if now < updated_at {
+        return "just now".to_string();
+    }
+    let diff_secs = (now - updated_at) / 1000;
+    if diff_secs < 60 {
+        format!("{}s ago", diff_secs)
+    } else if diff_secs < 3600 {
+        format!("{}m ago", diff_secs / 60)
+    } else if diff_secs < 86400 {
+        format!("{}h ago", diff_secs / 3600)
+    } else {
+        format!("{}d ago", diff_secs / 86400)
+    }
+}
+
+/// Format token count compactly
+fn format_tokens(tokens: u64) -> String {
+    if tokens == 0 {
+        return String::new();
+    }
+    format_token_count(tokens)
+}
+
+fn now_millis() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+

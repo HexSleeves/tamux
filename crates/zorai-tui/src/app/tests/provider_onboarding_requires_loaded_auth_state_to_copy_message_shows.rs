@@ -1,0 +1,2 @@
+include!("provider_onboarding_requires_loaded_auth_state_to_copy_parts/provider_onboarding_requires_loaded_auth_state_to_copy_message_shows.rs");
+include!("provider_onboarding_requires_loaded_auth_state_to_copy_parts/regenerate_message_requires_confirmation_before_sending_to_clicking.rs");

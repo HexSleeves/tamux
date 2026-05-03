@@ -1,0 +1,96 @@
+#[cfg(test)]
+pub fn selected_text(
+    area: Rect,
+    chat: &ChatState,
+    theme: &ThemeTokens,
+    current_tick: u64,
+    start: SelectionPoint,
+    end: SelectionPoint,
+) -> Option<String> {
+    let inner = content_inner(area);
+    let (all_lines, message_line_ranges) =
+        build_rendered_lines(chat, theme, inner.width as usize, current_tick, false);
+    if all_lines.is_empty() {
+        return None;
+    }
+    let _scroll = resolved_scroll(
+        chat,
+        all_lines.len(),
+        inner.height as usize,
+        &message_line_ranges,
+    );
+
+    let (start_point, end_point) =
+        if start.row <= end.row || (start.row == end.row && start.col <= end.col) {
+            (start, end)
+        } else {
+            (end, start)
+        };
+    let start_row = start_point.row.min(all_lines.len().saturating_sub(1));
+    let end_row = end_point.row.min(all_lines.len().saturating_sub(1));
+    let start_col = start_point.col;
+    let end_col = end_point.col;
+
+    if start_row == end_row && start_col == end_col {
+        return None;
+    }
+
+    let mut lines = Vec::new();
+
+    for row in start_row..=end_row {
+        let rendered = all_lines.get(row)?;
+        let (plain, content_start, content_end) = rendered_line_content_bounds(rendered);
+        let content_width = content_end.saturating_sub(content_start);
+        let from = if row == start_row {
+            start_col.min(content_width)
+        } else {
+            0
+        };
+        let to = if row == end_row {
+            end_col.min(content_width).max(from)
+        } else {
+            content_width
+        };
+
+        lines.push(display_slice(
+            &plain,
+            content_start.saturating_add(from),
+            content_start.saturating_add(to),
+        ));
+    }
+
+    let text = lines.join("\n");
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+#[cfg(test)]
+pub fn selection_point_from_mouse(
+    area: Rect,
+    chat: &ChatState,
+    theme: &ThemeTokens,
+    current_tick: u64,
+    mouse: Position,
+) -> Option<SelectionPoint> {
+    let snapshot = selection_snapshot(area, chat, theme, current_tick, false)?;
+    selection_point_from_snapshot(&snapshot, mouse)
+}
+
+pub fn selection_points_from_mouse(
+    area: Rect,
+    chat: &ChatState,
+    theme: &ThemeTokens,
+    current_tick: u64,
+    start: Position,
+    end: Position,
+    retry_wait_start_selected: bool,
+) -> Option<(SelectionPoint, SelectionPoint)> {
+    let snapshot = selection_snapshot(area, chat, theme, current_tick, retry_wait_start_selected)?;
+    Some((
+        selection_point_from_snapshot(&snapshot, start)?,
+        selection_point_from_snapshot(&snapshot, end)?,
+    ))
+}

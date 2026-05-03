@@ -1,0 +1,499 @@
+impl TuiModel {
+    fn image_remote_model_fetch_output_modalities(provider_id: &str) -> Option<String> {
+        if provider_id == PROVIDER_ID_OPENROUTER {
+            Some("image".to_string())
+        } else {
+            None
+        }
+    }
+
+    fn audio_remote_model_fetch_output_modalities(
+        endpoint: &str,
+        provider_id: &str,
+    ) -> Option<String> {
+        if provider_id != PROVIDER_ID_OPENROUTER {
+            return None;
+        }
+
+        match endpoint {
+            "tts" => Some("audio".to_string()),
+            _ => None,
+        }
+    }
+
+    pub(super) fn audio_catalog_models(
+        endpoint: &str,
+        provider_id: &str,
+    ) -> Vec<crate::state::config::FetchedModel> {
+        let model = |id: &str, name: &str, context_window: Option<u32>| {
+            crate::state::config::FetchedModel {
+                id: id.to_string(),
+                name: Some(name.to_string()),
+                context_window,
+                pricing: None,
+                metadata: None,
+            }
+        };
+        match (provider_id, endpoint) {
+            (PROVIDER_ID_OPENAI | PROVIDER_ID_AZURE_OPENAI, "stt") => vec![
+                model("gpt-4o-transcribe", "GPT-4o Transcribe", Some(128_000)),
+                model(
+                    "gpt-4o-mini-transcribe",
+                    "GPT-4o Mini Transcribe",
+                    Some(128_000),
+                ),
+                model(
+                    "gpt-4o-transcribe-diarize",
+                    "GPT-4o Transcribe Diarize",
+                    Some(16_000),
+                ),
+                model("whisper-1", "Whisper 1", None),
+            ],
+            (PROVIDER_ID_GROQ, "stt") => vec![
+                model("whisper-large-v3-turbo", "Whisper Large V3 Turbo", None),
+                model("whisper-large-v3", "Whisper Large V3", None),
+            ],
+            (PROVIDER_ID_GROQ, "tts") => vec![
+                model(
+                    "canopylabs/orpheus-v1-english",
+                    "CanopyLabs Orpheus V1 English",
+                    None,
+                ),
+                model(
+                    "canopylabs/orpheus-arabic-saudi",
+                    "CanopyLabs Orpheus Arabic Saudi",
+                    None,
+                ),
+            ],
+            (PROVIDER_ID_OPENAI | PROVIDER_ID_AZURE_OPENAI, "tts") => vec![
+                model("gpt-4o-mini-tts", "GPT-4o Mini TTS", Some(128_000)),
+                model("tts-1", "TTS 1", None),
+                model("tts-1-hd", "TTS 1 HD", None),
+            ],
+            (PROVIDER_ID_XAI, "stt" | "tts") => {
+                vec![model("grok-4.3", "Grok 4.3", Some(1_000_000))]
+            }
+            (PROVIDER_ID_XIAOMI_MIMO_TOKEN_PLAN, "tts") => vec![
+                model("mimo-v2.5-tts", "MiMo V2.5 TTS", Some(128_000)),
+                model(
+                    "mimo-v2.5-tts-voiceclone",
+                    "MiMo V2.5 TTS VoiceClone",
+                    Some(128_000),
+                ),
+                model(
+                    "mimo-v2.5-tts-voicedesign",
+                    "MiMo V2.5 TTS VoiceDesign",
+                    Some(128_000),
+                ),
+            ],
+            (PROVIDER_ID_MINIMAX | PROVIDER_ID_MINIMAX_CODING_PLAN, "tts") => vec![
+                model("speech-2.8-hd", "MiniMax Speech 2.8 HD", None),
+                model("speech-2.8-turbo", "MiniMax Speech 2.8 Turbo", None),
+                model("speech-2.6-hd", "MiniMax Speech 2.6 HD", None),
+                model("speech-2.6-turbo", "MiniMax Speech 2.6 Turbo", None),
+                model("speech-02-hd", "MiniMax Speech 02 HD", None),
+                model("speech-02-turbo", "MiniMax Speech 02 Turbo", None),
+                model("speech-01-hd", "MiniMax Speech 01 HD", None),
+                model("speech-01-turbo", "MiniMax Speech 01 Turbo", None),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
+    pub(super) fn default_audio_model_for(endpoint: &str, provider_id: &str) -> String {
+        Self::audio_catalog_models(endpoint, provider_id)
+            .into_iter()
+            .next()
+            .map(|model| model.id)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn image_generation_catalog_models(
+        provider_id: &str,
+    ) -> Vec<crate::state::config::FetchedModel> {
+        let model = |id: &str, name: &str, context_window: Option<u32>| {
+            crate::state::config::FetchedModel {
+                id: id.to_string(),
+                name: Some(name.to_string()),
+                context_window,
+                pricing: None,
+                metadata: None,
+            }
+        };
+        match provider_id {
+            PROVIDER_ID_OPENAI | PROVIDER_ID_AZURE_OPENAI | PROVIDER_ID_CUSTOM => {
+                vec![
+                    model("gpt-image-1", "GPT Image 1", None),
+                    model("gpt-image-2", "GPT Image 2", None),
+                ]
+            }
+            PROVIDER_ID_OPENROUTER => {
+                vec![
+                    model("openai/gpt-image-1", "OpenAI GPT Image 1", None),
+                    model("openai/gpt-image-2", "OpenAI GPT Image 2", None),
+                ]
+            }
+            PROVIDER_ID_MINIMAX | PROVIDER_ID_MINIMAX_CODING_PLAN => {
+                vec![model("image-01", "MiniMax Image 01", None)]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    pub(super) fn default_image_generation_model_for(provider_id: &str) -> String {
+        Self::image_generation_catalog_models(provider_id)
+            .into_iter()
+            .next()
+            .map(|model| model.id)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn embedding_catalog_models(
+        provider_id: &str,
+    ) -> Vec<crate::state::config::FetchedModel> {
+        let model = |id: &str, name: &str, context_window: Option<u32>| {
+            crate::state::config::FetchedModel {
+                id: id.to_string(),
+                name: Some(name.to_string()),
+                context_window,
+                pricing: None,
+                metadata: None,
+            }
+        };
+        match provider_id {
+            PROVIDER_ID_OPENAI | PROVIDER_ID_AZURE_OPENAI | PROVIDER_ID_CUSTOM => {
+                vec![
+                    model(
+                        "text-embedding-3-small",
+                        "Text Embedding 3 Small",
+                        Some(8192),
+                    ),
+                    model(
+                        "text-embedding-3-large",
+                        "Text Embedding 3 Large",
+                        Some(8192),
+                    ),
+                ]
+            }
+            PROVIDER_ID_OPENROUTER => {
+                vec![
+                    model(
+                        "openai/text-embedding-3-small",
+                        "OpenAI Text Embedding 3 Small",
+                        Some(8192),
+                    ),
+                    model(
+                        "openai/text-embedding-3-large",
+                        "OpenAI Text Embedding 3 Large",
+                        Some(8192),
+                    ),
+                ]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    pub(super) fn default_embedding_model_for(provider_id: &str) -> String {
+        Self::embedding_catalog_models(provider_id)
+            .into_iter()
+            .next()
+            .map(|model| model.id)
+            .unwrap_or_default()
+    }
+
+    pub(super) fn set_audio_config_string(&mut self, endpoint: &str, field: &str, value: String) {
+        self.send_daemon_command(DaemonCommand::SetConfigItem {
+            key_path: format!("/audio/{endpoint}/{field}"),
+            value_json: serde_json::Value::String(value.clone()).to_string(),
+        });
+        if let Some(ref mut raw) = self.config.agent_config_raw {
+            if raw.get("audio").is_none() {
+                raw["audio"] = serde_json::json!({});
+            }
+            if raw["audio"].get(endpoint).is_none() {
+                raw["audio"][endpoint] = serde_json::json!({});
+            }
+            raw["audio"][endpoint][field] = serde_json::Value::String(value);
+        }
+    }
+
+    pub(super) fn set_image_generation_config_string(&mut self, field: &str, value: String) {
+        self.send_daemon_command(DaemonCommand::SetConfigItem {
+            key_path: format!("/image/generation/{field}"),
+            value_json: serde_json::Value::String(value.clone()).to_string(),
+        });
+        if let Some(ref mut raw) = self.config.agent_config_raw {
+            if raw.get("image").is_none() {
+                raw["image"] = serde_json::json!({});
+            }
+            if raw["image"].get("generation").is_none() {
+                raw["image"]["generation"] = serde_json::json!({});
+            }
+            raw["image"]["generation"][field] = serde_json::Value::String(value);
+        }
+    }
+
+    pub(super) fn set_embedding_config_string(&mut self, field: &str, value: String) {
+        self.send_daemon_command(DaemonCommand::SetConfigItem {
+            key_path: format!("/semantic/embedding/{field}"),
+            value_json: serde_json::Value::String(value.clone()).to_string(),
+        });
+        if let Some(ref mut raw) = self.config.agent_config_raw {
+            if raw.get("semantic").is_none() {
+                raw["semantic"] = serde_json::json!({});
+            }
+            if raw["semantic"].get("embedding").is_none() {
+                raw["semantic"]["embedding"] = serde_json::json!({});
+            }
+            raw["semantic"]["embedding"][field] = serde_json::Value::String(value);
+        }
+    }
+
+    pub(super) fn open_audio_model_picker(&mut self, endpoint: &str) {
+        let provider_id = match endpoint {
+            "stt" => {
+                let provider = self.config.audio_stt_provider();
+                if provider.trim().is_empty() {
+                    "openai".to_string()
+                } else {
+                    provider
+                }
+            }
+            "tts" => {
+                let provider = self.config.audio_tts_provider();
+                if provider.trim().is_empty() {
+                    "openai".to_string()
+                } else {
+                    provider
+                }
+            }
+            _ => return,
+        };
+        let (base_url, api_key, auth_source) = self.provider_auth_snapshot(&provider_id);
+        let models = Self::audio_catalog_models(endpoint, &provider_id);
+        self.config
+            .reduce(config::ConfigAction::ModelsFetched(models));
+        if self.should_fetch_remote_models(&provider_id, &auth_source) {
+            let output_modalities =
+                Self::audio_remote_model_fetch_output_modalities(endpoint, &provider_id);
+            self.send_daemon_command(DaemonCommand::FetchModels {
+                provider_id,
+                base_url,
+                api_key,
+                output_modalities,
+            });
+        }
+        self.settings_picker_target = Some(match endpoint {
+            "stt" => SettingsPickerTarget::AudioSttModel,
+            "tts" => SettingsPickerTarget::AudioTtsModel,
+            _ => return,
+        });
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
+        self.sync_model_picker_item_count();
+    }
+
+    pub(super) fn open_image_generation_model_picker(&mut self) {
+        let provider_id = {
+            let provider = self.config.image_generation_provider();
+            if provider.trim().is_empty() {
+                "openai".to_string()
+            } else {
+                provider
+            }
+        };
+        let (base_url, api_key, auth_source) = self.provider_auth_snapshot(&provider_id);
+        let models = Self::image_generation_catalog_models(&provider_id);
+        self.config
+            .reduce(config::ConfigAction::ModelsFetched(models));
+        if self.should_fetch_remote_models(&provider_id, &auth_source) {
+            let output_modalities = Self::image_remote_model_fetch_output_modalities(&provider_id);
+            self.send_daemon_command(DaemonCommand::FetchModels {
+                provider_id,
+                base_url,
+                api_key,
+                output_modalities,
+            });
+        }
+        self.settings_picker_target = Some(SettingsPickerTarget::ImageGenerationModel);
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
+        self.sync_model_picker_item_count();
+    }
+
+    pub(super) fn open_embedding_model_picker(&mut self) {
+        let provider_id = {
+            let provider = self.config.semantic_embedding_provider();
+            if provider.trim().is_empty() {
+                "openai".to_string()
+            } else {
+                provider
+            }
+        };
+        let (base_url, api_key, auth_source) = self.provider_auth_snapshot(&provider_id);
+        let models = Self::embedding_catalog_models(&provider_id);
+        self.config
+            .reduce(config::ConfigAction::ModelsFetched(models));
+        if self.should_fetch_remote_models(&provider_id, &auth_source) {
+            self.send_daemon_command(DaemonCommand::FetchModels {
+                provider_id,
+                base_url,
+                api_key,
+                output_modalities: Some("embedding".to_string()),
+            });
+        }
+        self.settings_picker_target = Some(SettingsPickerTarget::EmbeddingModel);
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
+        self.sync_model_picker_item_count();
+    }
+
+    pub(super) fn open_provider_backed_model_picker(
+        &mut self,
+        target: SettingsPickerTarget,
+        provider_id: String,
+        base_url: String,
+        api_key: String,
+        auth_source: String,
+    ) {
+        let models = providers::known_models_for_provider_auth(&provider_id, &auth_source);
+        self.config
+            .reduce(config::ConfigAction::ModelsFetched(models));
+        if self.should_fetch_remote_models(&provider_id, &auth_source) {
+            self.send_daemon_command(DaemonCommand::FetchModels {
+                provider_id,
+                base_url,
+                api_key,
+                output_modalities: None,
+            });
+        }
+        self.settings_picker_target = Some(target);
+        self.modal
+            .reduce(modal::ModalAction::Push(modal::ModalKind::ModelPicker));
+        self.sync_model_picker_item_count();
+    }
+
+    fn json_array_contains_audio(value: Option<&serde_json::Value>) -> bool {
+        value
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items.iter().any(|item| {
+                    item.as_str()
+                        .map(str::trim)
+                        .map(|value| value.eq_ignore_ascii_case("audio"))
+                        .unwrap_or(false)
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    fn modality_side_has_audio(modality: &str, side: &str) -> bool {
+        let trimmed = modality.trim().to_ascii_lowercase();
+        if trimmed.is_empty() {
+            return false;
+        }
+
+        let Some((input, output)) = trimmed.split_once("->") else {
+            return false;
+        };
+        let directional = match side {
+            "input" => input,
+            "output" => output,
+            _ => return false,
+        };
+
+        directional
+            .split(|ch: char| matches!(ch, '+' | ',' | '|' | '/' | ' '))
+            .any(|token| token.trim() == "audio")
+    }
+
+    fn json_string_has_directional_audio(value: Option<&serde_json::Value>, side: &str) -> bool {
+        value
+            .and_then(|value| value.as_str())
+            .map(|value| Self::modality_side_has_audio(value, side))
+            .unwrap_or(false)
+    }
+
+    fn fetched_model_audio_direction_override(
+        model: &crate::state::config::FetchedModel,
+        endpoint: &str,
+    ) -> Option<bool> {
+        let provider_prefix_sensitive = model.id.starts_with("xai/")
+            || model.id.starts_with("openai/")
+            || model.id.starts_with(&format!("{PROVIDER_ID_XAI}/"))
+            || model.id.starts_with(&format!("{PROVIDER_ID_OPENROUTER}/"));
+        let name = model
+            .name
+            .as_deref()
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        let id = model.id.to_ascii_lowercase();
+        let haystack = format!("{id} {name}");
+
+        let looks_like_stt = haystack.contains("transcribe")
+            || haystack.contains("transcription")
+            || haystack.contains("speech-to-text")
+            || haystack.contains("speech to text")
+            || haystack.contains("whisper")
+            || (provider_prefix_sensitive && haystack.contains("listen"));
+        let looks_like_tts = haystack.contains("text-to-speech")
+            || haystack.contains("text to speech")
+            || haystack.contains("-tts")
+            || haystack.contains(" tts")
+            || (provider_prefix_sensitive && haystack.contains("speak"));
+
+        match endpoint {
+            "stt" if looks_like_stt && !looks_like_tts => Some(true),
+            "stt" if looks_like_tts && !looks_like_stt => Some(false),
+            "tts" if looks_like_tts && !looks_like_stt => Some(true),
+            "tts" if looks_like_stt && !looks_like_tts => Some(false),
+            _ => None,
+        }
+    }
+
+    fn fetched_model_supports_audio_endpoint(
+        model: &crate::state::config::FetchedModel,
+        endpoint: &str,
+    ) -> bool {
+        let metadata = model.metadata.as_ref();
+        let input_audio = Self::json_array_contains_audio(
+            metadata
+                .and_then(|value| value.pointer("/architecture/input_modalities"))
+                .or_else(|| metadata.and_then(|value| value.pointer("/input_modalities"))),
+        );
+        let output_audio = Self::json_array_contains_audio(
+            metadata
+                .and_then(|value| value.pointer("/architecture/output_modalities"))
+                .or_else(|| metadata.and_then(|value| value.pointer("/output_modalities"))),
+        );
+        let modality_input_audio = Self::json_string_has_directional_audio(
+            metadata
+                .and_then(|value| value.pointer("/architecture/modality"))
+                .or_else(|| metadata.and_then(|value| value.pointer("/modality"))),
+            "input",
+        );
+        let modality_output_audio = Self::json_string_has_directional_audio(
+            metadata
+                .and_then(|value| value.pointer("/architecture/modality"))
+                .or_else(|| metadata.and_then(|value| value.pointer("/modality"))),
+            "output",
+        );
+
+        let directional_match = match endpoint {
+            "stt" => input_audio || modality_input_audio,
+            "tts" => output_audio || modality_output_audio,
+            _ => false,
+        };
+        if directional_match {
+            return true;
+        }
+
+        if let Some(override_result) = Self::fetched_model_audio_direction_override(model, endpoint)
+        {
+            return override_result;
+        }
+
+        false
+    }
+
+}

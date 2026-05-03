@@ -1,0 +1,2 @@
+include!("apply_mouse_selection_highlight_to_build_rendered_lines_parts/build_rendered_lines_to_build_visible_window_from_snapshot.rs");
+include!("apply_mouse_selection_highlight_to_build_rendered_lines_parts/apply_mouse_selection_highlight_to_build_rendered_lines_call_count.rs");

@@ -1,0 +1,488 @@
+fn render_markdown_segment(content: &str, width: usize) -> Vec<Line<'static>> {
+    let normalized = normalize_markdown_for_tui(content);
+    let md_text = tui_markdown::from_str(&normalized);
+    // Convert ratatui_core::Line to ratatui::Line via plain text + styles
+    let mut result = Vec::new();
+    for md_line in md_text.lines {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for md_span in md_line.spans {
+            let s = convert_style(md_span.style);
+            spans.push(Span::styled(md_span.content.to_string(), s));
+        }
+        result.push(Line::from(spans).style(convert_style(md_line.style)));
+    }
+    if result.is_empty() {
+        // Fallback to plain wrap
+        wrap_text(content, width)
+            .into_iter()
+            .map(|s| Line::from(Span::raw(s)))
+            .collect()
+    } else {
+        wrap_styled_lines(result, width)
+    }
+}
+
+fn convert_style(style: ratatui_core::style::Style) -> Style {
+    let mut result = Style::default();
+
+    if let Some(fg) = style.fg {
+        result = result.fg(convert_color(fg));
+    }
+    if let Some(bg) = style.bg {
+        result = result.bg(convert_color(bg));
+    }
+
+    let add = convert_modifier(style.add_modifier);
+    if !add.is_empty() {
+        result = result.add_modifier(add);
+    }
+
+    let remove = convert_modifier(style.sub_modifier);
+    if !remove.is_empty() {
+        result = result.remove_modifier(remove);
+    }
+
+    result
+}
+
+fn convert_modifier(modifier: ratatui_core::style::Modifier) -> Modifier {
+    let mut result = Modifier::empty();
+
+    if modifier.contains(ratatui_core::style::Modifier::BOLD) {
+        result |= Modifier::BOLD;
+    }
+    if modifier.contains(ratatui_core::style::Modifier::DIM) {
+        result |= Modifier::DIM;
+    }
+    if modifier.contains(ratatui_core::style::Modifier::ITALIC) {
+        result |= Modifier::ITALIC;
+    }
+    if modifier.contains(ratatui_core::style::Modifier::UNDERLINED) {
+        result |= Modifier::UNDERLINED;
+    }
+    if modifier.contains(ratatui_core::style::Modifier::SLOW_BLINK) {
+        result |= Modifier::SLOW_BLINK;
+    }
+    if modifier.contains(ratatui_core::style::Modifier::RAPID_BLINK) {
+        result |= Modifier::RAPID_BLINK;
+    }
+    if modifier.contains(ratatui_core::style::Modifier::REVERSED) {
+        result |= Modifier::REVERSED;
+    }
+    if modifier.contains(ratatui_core::style::Modifier::HIDDEN) {
+        result |= Modifier::HIDDEN;
+    }
+    if modifier.contains(ratatui_core::style::Modifier::CROSSED_OUT) {
+        result |= Modifier::CROSSED_OUT;
+    }
+
+    result
+}
+
+fn convert_color(c: ratatui_core::style::Color) -> Color {
+    match c {
+        ratatui_core::style::Color::Reset => Color::Reset,
+        ratatui_core::style::Color::Black => Color::Black,
+        ratatui_core::style::Color::Red => Color::Red,
+        ratatui_core::style::Color::Green => Color::Green,
+        ratatui_core::style::Color::Yellow => Color::Yellow,
+        ratatui_core::style::Color::Blue => Color::Blue,
+        ratatui_core::style::Color::Magenta => Color::Magenta,
+        ratatui_core::style::Color::Cyan => Color::Cyan,
+        ratatui_core::style::Color::Gray => Color::Gray,
+        ratatui_core::style::Color::White => Color::White,
+        ratatui_core::style::Color::Indexed(i) => Color::Indexed(i),
+        ratatui_core::style::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+        _ => Color::Reset,
+    }
+}
+
+/// Set of message indices whose reasoning blocks are expanded
+pub type ExpandedReasoning = std::collections::HashSet<usize>;
+/// Set of message indices whose tool details are expanded
+pub type ExpandedTools = std::collections::HashSet<usize>;
+
+pub(crate) fn is_meta_cognition_message(msg: &AgentMessage) -> bool {
+    matches!(msg.role, MessageRole::Assistant | MessageRole::System)
+        && is_meta_cognition_content(&msg.content)
+}
+
+fn is_meta_cognition_content(content: &str) -> bool {
+    content
+        .trim_start()
+        .starts_with("Meta-cognitive intervention")
+}
+
+fn toggle_glyph(expanded: bool) -> &'static str {
+    if expanded {
+        "\u{25be}"
+    } else {
+        "\u{25b6}"
+    }
+}
+
+/// Convert a message into ratatui Lines (all owned/static)
+pub fn message_to_lines(
+    msg: &AgentMessage,
+    msg_index: usize,
+    mode: TranscriptMode,
+    theme: &ThemeTokens,
+    width: usize,
+    expanded: &ExpandedReasoning,
+    expanded_tools: &ExpandedTools,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+
+    match mode {
+        TranscriptMode::Compact => render_compact(
+            msg,
+            msg_index,
+            theme,
+            width,
+            expanded,
+            expanded_tools,
+            &mut lines,
+        ),
+        TranscriptMode::Tools => render_tools_only(msg, theme, width, &mut lines),
+        TranscriptMode::Full => render_full(
+            msg,
+            msg_index,
+            theme,
+            width,
+            expanded,
+            expanded_tools,
+            &mut lines,
+        ),
+    }
+
+    lines
+}
+
+fn render_compact(
+    msg: &AgentMessage,
+    msg_index: usize,
+    theme: &ThemeTokens,
+    width: usize,
+    expanded: &ExpandedReasoning,
+    expanded_tools: &ExpandedTools,
+    lines: &mut Vec<Line<'static>>,
+) {
+    let content_width = width.max(1);
+    let image_lines = inline_image_attachment_lines(msg, content_width, theme);
+
+    if msg.message_kind == "compaction_artifact" {
+        let compaction_content = {
+            let visible_header = msg.content.trim();
+            let payload = msg
+                .compaction_payload
+                .as_deref()
+                .map(str::trim)
+                .filter(|payload| !payload.is_empty());
+
+            match payload {
+                Some(payload) if visible_header.is_empty() => payload.to_string(),
+                Some(payload) if visible_header.contains(payload) => visible_header.to_string(),
+                Some(payload) => format!("{visible_header}\n\nContent:\n{payload}"),
+                None => msg.content.clone(),
+            }
+        };
+        lines.push(Line::from(Span::styled(
+            "---- auto compaction ----",
+            theme.fg_dim,
+        )));
+        for line in wrap_text(&compaction_content, content_width) {
+            lines.push(Line::from(Span::styled(line, theme.fg_active)));
+        }
+        lines.push(Line::from(Span::styled(
+            "------------------------",
+            theme.fg_dim,
+        )));
+        return;
+    }
+
+    if let Some(operator_question_lines) =
+        render_operator_question_message(msg, theme, content_width)
+    {
+        lines.extend(operator_question_lines);
+        return;
+    }
+
+    // TOOL messages: compact one-liner or expanded with args + result
+    if msg.role == MessageRole::Tool {
+        if let Some(name) = &msg.tool_name {
+            let status = msg.tool_status.as_deref().unwrap_or("done");
+            let (status_text, status_style) = format_tool_status(status, theme);
+            let is_expanded = expanded_tools.contains(&msg_index);
+            let tool_icon = tool_icon_for(name, msg.tool_arguments.as_deref());
+            let mut header_spans = vec![
+                Span::styled(toggle_glyph(is_expanded), theme.fg_dim),
+                Span::raw(" "),
+                Span::styled(tool_icon.marker, theme.accent_assistant),
+                Span::raw("  "),
+                Span::styled(name.clone(), theme.fg_dim),
+                Span::raw(" "),
+                Span::styled(status_text, status_style),
+            ];
+
+            if let Some(review) = msg.weles_review.as_ref() {
+                let (badge, badge_style) = format_weles_review_badge(review, theme);
+                header_spans.push(Span::raw(" "));
+                header_spans.push(Span::styled(badge, badge_style));
+            }
+            lines.push(Line::from(header_spans));
+
+            // Expanded tool details
+            if is_expanded {
+                let detail_indent = 4;
+                let detail_width = width.saturating_sub(detail_indent + 1);
+
+                if let Some(review) = msg.weles_review.as_ref() {
+                    render_weles_review_details(review, theme, detail_width, lines);
+                }
+
+                // Show arguments
+                if let Some(args) = &msg.tool_arguments {
+                    if !args.is_empty() {
+                        if let Some(diff_lines) =
+                            render_tool_edit_diff(name, args, theme, detail_width.max(1))
+                        {
+                            lines.push(Line::from(vec![Span::styled("changes:", theme.fg_dim)]));
+                            lines.extend(diff_lines);
+                        } else if let Some(structured_args) = render_tool_structured_json(
+                            name,
+                            ToolStructuredValueSource::Arguments,
+                            args,
+                            theme,
+                            detail_width.max(1),
+                        ) {
+                            lines.push(Line::from(vec![Span::styled("args:", theme.fg_dim)]));
+                            lines.extend(structured_args);
+                        } else {
+                            let mut rendered_arg_lines =
+                                wrap_text(args, detail_width.max(1)).into_iter();
+                            if let Some(first_line) = rendered_arg_lines.next() {
+                                lines.push(Line::from(vec![
+                                    Span::styled("args: ", theme.fg_dim),
+                                    Span::styled(first_line, theme.fg_active),
+                                ]));
+                                for line in rendered_arg_lines {
+                                    lines.push(Line::from(vec![
+                                        Span::styled("      ", theme.fg_dim),
+                                        Span::styled(line, theme.fg_active),
+                                    ]));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Show full result
+                let result_text = &msg.content;
+                if !result_text.is_empty() {
+                    if let Some(structured_result) = render_tool_structured_json(
+                        name,
+                        ToolStructuredValueSource::Result,
+                        result_text,
+                        theme,
+                        detail_width.max(1),
+                    ) {
+                        lines.push(Line::from(vec![Span::styled("result:", theme.fg_dim)]));
+                        lines.extend(structured_result);
+                    } else {
+                        let mut result_line_index = 0usize;
+                        for result_line in result_text.lines() {
+                            let wrapped_result = wrap_text(result_line, detail_width.max(1));
+                            for wrapped_line in wrapped_result {
+                                let prefix = if result_line_index == 0 {
+                                    "result: "
+                                } else {
+                                    "        "
+                                };
+                                lines.push(Line::from(vec![
+                                    Span::styled(prefix.to_string(), theme.fg_dim),
+                                    Span::styled(wrapped_line, theme.fg_active),
+                                ]));
+                                result_line_index += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    let content = &msg.content;
+    // Skip truly empty non-assistant messages (no content, no reasoning)
+    if content.is_empty() && image_lines.is_empty() && msg.role != MessageRole::Assistant {
+        return;
+    }
+    if content.is_empty() && image_lines.is_empty() && msg.reasoning.is_none() {
+        return;
+    }
+
+    let md_lines: Vec<Line<'static>> = if msg.role == MessageRole::Assistant {
+        render_markdown(content, content_width)
+    } else if msg.role == MessageRole::User {
+        wrap_text(content, content_width)
+            .into_iter()
+            .map(|s| Line::from(Span::styled(s, theme.fg_active)))
+            .collect()
+    } else if msg.role == MessageRole::System {
+        wrap_text(content, content_width)
+            .into_iter()
+            .map(|s| Line::from(Span::styled(s, theme.fg_dim)))
+            .collect()
+    } else {
+        wrap_text(content, content_width)
+            .into_iter()
+            .map(|s| Line::from(Span::styled(s, theme.fg_active)))
+            .collect()
+    };
+    if is_meta_cognition_message(msg) {
+        let is_expanded = expanded.contains(&msg_index);
+        lines.push(Line::from(vec![Span::styled(
+            format!("{} Meta-cognition", toggle_glyph(is_expanded)),
+            theme.fg_dim,
+        )]));
+
+        if is_expanded {
+            let detail_width = width.saturating_sub(2).max(1);
+            let dark_blue = Style::default().fg(Color::Indexed(24));
+            for detail_line in wrap_text(content, detail_width) {
+                lines.push(Line::from(vec![
+                    Span::styled("\u{2502}", dark_blue),
+                    Span::raw(" "),
+                    Span::styled(detail_line, theme.fg_dim),
+                ]));
+            }
+        }
+
+        if !image_lines.is_empty() {
+            lines.extend(image_lines);
+        }
+        return;
+    }
+
+    let has_reasoning = msg.role == MessageRole::Assistant
+        && msg
+            .reasoning
+            .as_deref()
+            .is_some_and(|reasoning| !reasoning.is_empty());
+
+    if has_reasoning {
+        let reasoning = msg.reasoning.as_deref().unwrap_or_default();
+        let is_expanded = expanded.contains(&msg_index);
+        if is_expanded {
+            lines.push(Line::from(vec![Span::styled(
+                format!("{} Reasoning", toggle_glyph(true)),
+                theme.fg_dim,
+            )]));
+            let reasoning_width = width.saturating_sub(2).max(1);
+            let dark_blue = Style::default().fg(Color::Indexed(24));
+            for rline in wrap_text(reasoning, reasoning_width) {
+                lines.push(Line::from(vec![
+                    Span::styled("\u{2502}", dark_blue),
+                    Span::raw(" "),
+                    Span::styled(rline, theme.fg_dim),
+                ]));
+            }
+        } else {
+            lines.push(Line::from(vec![Span::styled(
+                format!("{} Reasoning", toggle_glyph(false)),
+                theme.fg_dim,
+            )]));
+        }
+
+        lines.extend(md_lines);
+    } else {
+        lines.extend(md_lines);
+    }
+
+    if !image_lines.is_empty() {
+        lines.extend(image_lines);
+    }
+}
+
+fn inline_image_attachment_lines(
+    msg: &AgentMessage,
+    width: usize,
+    theme: &ThemeTokens,
+) -> Vec<Line<'static>> {
+    let Some(path) = crate::widgets::chat::message_image_preview_path(msg) else {
+        return Vec::new();
+    };
+    image_preview::render_image_preview_lines(&path, width, 12, theme)
+}
+
+fn render_tools_only(
+    msg: &AgentMessage,
+    theme: &ThemeTokens,
+    width: usize,
+    lines: &mut Vec<Line<'static>>,
+) {
+    if msg.role != MessageRole::Tool && msg.tool_name.is_none() {
+        return;
+    }
+
+    if let Some(name) = &msg.tool_name {
+        let status = msg.tool_status.as_deref().unwrap_or("done");
+        let (status_text, status_style) = format_tool_status(status, theme);
+        let args_preview = msg.tool_arguments.as_deref().unwrap_or("");
+        let tool_icon = tool_icon_for(name, msg.tool_arguments.as_deref());
+        let max_args = width.saturating_sub(30);
+        let args_short = if args_preview.len() > max_args {
+            &args_preview[..max_args]
+        } else {
+            args_preview
+        };
+
+        let mut spans = vec![
+            Span::styled(tool_icon.marker, theme.accent_assistant),
+            Span::raw("  "),
+            Span::styled(name.clone(), theme.fg_active),
+            Span::raw(" "),
+            Span::styled(status_text, status_style),
+        ];
+
+        if !args_short.is_empty() {
+            spans.push(Span::raw("  "));
+            spans.push(Span::styled(args_short.to_string(), theme.fg_dim));
+        }
+
+        lines.push(Line::from(spans));
+    }
+}
+
+fn render_full(
+    msg: &AgentMessage,
+    msg_index: usize,
+    theme: &ThemeTokens,
+    width: usize,
+    expanded: &ExpandedReasoning,
+    expanded_tools: &ExpandedTools,
+    lines: &mut Vec<Line<'static>>,
+) {
+    // Full mode: always expand reasoning and tools
+    let mut full_expanded = expanded.clone();
+    full_expanded.insert(msg_index);
+    let mut full_tools = expanded_tools.clone();
+    full_tools.insert(msg_index);
+    render_compact(
+        msg,
+        msg_index,
+        theme,
+        width,
+        &full_expanded,
+        &full_tools,
+        lines,
+    );
+}
+
+fn format_tool_status(status: &str, theme: &ThemeTokens) -> (&'static str, Style) {
+    match status {
+        "completed" | "done" | "success" => ("\u{2713} done", theme.accent_success),
+        "error" | "failed" => ("\u{2717} error", theme.accent_danger),
+        _ => ("\u{25cf} running", theme.accent_secondary),
+    }
+}

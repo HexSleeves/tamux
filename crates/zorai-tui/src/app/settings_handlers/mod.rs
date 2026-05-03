@@ -1,12 +1,12 @@
 use super::*;
 
 include!("embedding_dimensions.rs");
-include!("impl_part1.rs");
-include!("impl_part2.rs");
-include!("impl_part3.rs");
-include!("impl_part4.rs");
-include!("impl_part5.rs");
-include!("impl_part6.rs");
+include!("image_remote_model_fetch_output_modalities_to_fetched_model_supports.rs");
+include!("commit_subagent_editor_to_run_subagent_action.rs");
+include!("handle_honcho_settings_key_to_handle_subagent_settings_key.rs");
+include!("openrouter_endpoint_url_for_to_activate_settings_field.rs");
+include!("toggle_settings_field_to_handle_plugins_settings_key.rs");
+include!("activate_feature_settings_field_to_settings_field_click_uses_toggle.rs");
 
 #[cfg(test)]
 mod tests {
@@ -91,7 +91,7 @@ mod tests {
         init_provider_auth_db(path);
         let conn = Connection::open(path).expect("open auth db");
         conn.query_row(
-            "SELECT 1 FROM provider_auth_state WHERE provider_id = ?1 AND auth_mode = ?2",
+            "SELECT 1 FROM provider_auth_state WHERE provider_id = ?1 AND auth_mode = ?2 AND deleted_at IS NULL",
             params![provider_id, auth_mode],
             |_row| Ok(()),
         )
@@ -106,8 +106,8 @@ mod tests {
         std::env::temp_dir().join(format!("zorai-{name}-{nanos}.sqlite"))
     }
 
-    include!("tests/tests_part1.rs");
-    include!("tests/tests_part2.rs");
-    include!("tests/tests_part3.rs");
+    include!("tests/whatsapp_link_device_probes_status_before_starting_link_flow.rs");
+    include!("tests/operator_model_inspect_field_requests_operator_model_snapshot_to_chat.rs");
+    include!("tests/collaboration_sessions_inspect_field_requests_collaboration_snapshot.rs");
     include!("tests/tests_audio.rs");
 }
