@@ -72,8 +72,8 @@ export function ToolEventRow({ group }: { group: ToolEventGroup }) {
               aria-label={toolIcon.label}
               title={toolIcon.label}
               style={{
-                minWidth: 34,
-                height: 18,
+                width: 22,
+                height: 22,
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -81,7 +81,7 @@ export function ToolEventRow({ group }: { group: ToolEventGroup }) {
                 borderRadius: 4,
                 background: "rgba(255,255,255,0.04)",
                 color: "var(--text-muted)",
-                fontSize: 9,
+                fontSize: 14,
                 fontWeight: 700,
                 letterSpacing: 0,
                 lineHeight: 1,

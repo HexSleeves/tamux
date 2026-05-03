@@ -6,13 +6,16 @@ import { getToolIconPresentation } from "./toolIconPresentation";
 describe("getToolIconPresentation", () => {
   it("classifies web browsing and search tools as web", () => {
     expect(getToolIconPresentation(TOOL_NAMES.webSearch).kind).toBe("web");
+    expect(getToolIconPresentation(TOOL_NAMES.webSearch).glyph).toBe("🌐");
     expect(getToolIconPresentation(TOOL_NAMES.fetchUrl).kind).toBe("web");
     expect(getToolIconPresentation(TOOL_NAMES.browserNavigate).kind).toBe("web");
   });
 
   it("classifies guideline and skill governance tools distinctly", () => {
     expect(getToolIconPresentation(TOOL_NAMES.readGuideline).kind).toBe("guideline");
+    expect(getToolIconPresentation(TOOL_NAMES.readGuideline).glyph).toBe("📖");
     expect(getToolIconPresentation(TOOL_NAMES.readSkill).kind).toBe("skill");
+    expect(getToolIconPresentation(TOOL_NAMES.readSkill).glyph).toBe("🧠");
   });
 
   it("classifies direct and shell-wrapped Python calls as python", () => {
@@ -27,6 +30,7 @@ describe("getToolIconPresentation", () => {
 
   it("classifies terminal calls as terminal otherwise", () => {
     expect(getToolIconPresentation(TOOL_NAMES.bashCommand).kind).toBe("terminal");
+    expect(getToolIconPresentation(TOOL_NAMES.bashCommand).glyph).toBe("⌨");
     expect(getToolIconPresentation(TOOL_NAMES.runTerminalCommand).kind).toBe("terminal");
   });
 
@@ -69,5 +73,8 @@ describe("getToolIconPresentation", () => {
     for (const [toolName, kind] of examples) {
       expect(getToolIconPresentation(toolName).kind, toolName).toBe(kind);
     }
+
+    expect(getToolIconPresentation(TOOL_NAMES.getGitStatus).glyph).toBe("⑂");
+    expect(getToolIconPresentation(TOOL_NAMES.updateTodo).glyph).toBe("☑");
   });
 });

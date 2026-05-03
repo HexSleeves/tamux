@@ -1,8 +1,7 @@
 use super::flow::{
     parse_fetch_models_terminal_response, parse_gh_cli_token_output,
-    parse_set_config_item_response, provider_requires_api_key_prompt, provider_uses_browser_auth,
-    setup_probe_from_config_json, should_validate_provider_after_setup, AuthSetupResult,
-    SetupProbe,
+    parse_set_config_item_response, provider_uses_browser_auth, setup_probe_from_config_json,
+    should_validate_provider_after_setup, AuthSetupResult, SetupProbe,
 };
 use super::*;
 
@@ -453,7 +452,6 @@ fn github_copilot_setup_prefers_browser_auth_over_api_key_prompt() {
     };
 
     assert!(provider_uses_browser_auth(&provider));
-    assert!(!provider_requires_api_key_prompt(&provider));
 }
 
 #[test]
@@ -487,7 +485,6 @@ fn anthropic_setup_uses_api_key_prompt_and_validation() {
     };
 
     assert!(!provider_uses_browser_auth(&provider));
-    assert!(provider_requires_api_key_prompt(&provider));
     assert!(should_validate_provider_after_setup(
         &provider,
         AuthSetupResult {

@@ -9,6 +9,30 @@ fn render_plain_text(workspace: &WorkspaceState, area: Rect) -> String {
     render_plain_text_with_scroll(workspace, area, &WorkspaceBoardScroll::default())
 }
 
+fn hit_test(
+    area: Rect,
+    workspace: &WorkspaceState,
+    expanded_task_ids: &std::collections::HashSet<String>,
+    position: Position,
+) -> Option<WorkspaceBoardHitTarget> {
+    hit_test_with_scroll(
+        area,
+        workspace,
+        expanded_task_ids,
+        &WorkspaceBoardScroll::default(),
+        position,
+    )
+}
+
+fn task_card_rect(
+    body: Rect,
+    tasks: &[WorkspaceTask],
+    expanded_task_ids: &std::collections::HashSet<String>,
+    index: usize,
+) -> Rect {
+    task_card_rect_with_scroll(body, tasks, expanded_task_ids, 0, index)
+}
+
 fn render_plain_text_with_scroll(
     workspace: &WorkspaceState,
     area: Rect,
@@ -322,11 +346,12 @@ fn workspace_board_colors_failed_and_done_cards() {
 
     terminal
         .draw(|frame| {
-            render(
+            render_with_scroll(
                 frame,
                 area,
                 &state,
                 &std::collections::HashSet::new(),
+                &WorkspaceBoardScroll::default(),
                 None,
                 &theme,
                 true,

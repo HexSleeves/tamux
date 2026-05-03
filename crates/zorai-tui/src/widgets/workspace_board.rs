@@ -93,27 +93,6 @@ impl WorkspaceBoardScroll {
     }
 }
 
-pub fn render(
-    frame: &mut Frame,
-    area: Rect,
-    workspace: &WorkspaceState,
-    expanded_task_ids: &HashSet<String>,
-    selected: Option<&WorkspaceBoardHitTarget>,
-    theme: &ThemeTokens,
-    focused: bool,
-) {
-    render_with_scroll(
-        frame,
-        area,
-        workspace,
-        expanded_task_ids,
-        &WorkspaceBoardScroll::default(),
-        selected,
-        theme,
-        focused,
-    );
-}
-
 pub fn render_with_scroll(
     frame: &mut Frame,
     area: Rect,
@@ -244,21 +223,6 @@ pub fn step_selection(
     let last = targets.len().saturating_sub(1) as i32;
     let next = (current_index as i32 + delta).clamp(0, last) as usize;
     targets.get(next).cloned()
-}
-
-pub fn hit_test(
-    area: Rect,
-    workspace: &WorkspaceState,
-    expanded_task_ids: &HashSet<String>,
-    position: Position,
-) -> Option<WorkspaceBoardHitTarget> {
-    hit_test_with_scroll(
-        area,
-        workspace,
-        expanded_task_ids,
-        &WorkspaceBoardScroll::default(),
-        position,
-    )
 }
 
 pub fn hit_test_with_scroll(
@@ -874,29 +838,6 @@ fn task_card_height(
     } else {
         TASK_COLLAPSED_ROW_HEIGHT.saturating_add(title_extra_rows)
     }
-}
-
-fn task_card_rect(
-    body: Rect,
-    tasks: &[zorai_protocol::WorkspaceTask],
-    expanded_task_ids: &HashSet<String>,
-    index: usize,
-) -> Rect {
-    let card_body_width = body.width.saturating_sub(2);
-    let offset = tasks.iter().take(index).fold(0u16, |offset, task| {
-        offset.saturating_add(task_card_height(task, card_body_width, expanded_task_ids))
-    });
-    let y = body.y.saturating_add(offset);
-    let height = tasks
-        .get(index)
-        .map(|task| task_card_height(task, card_body_width, expanded_task_ids))
-        .unwrap_or(TASK_COLLAPSED_ROW_HEIGHT);
-    Rect::new(
-        body.x,
-        y,
-        body.width,
-        height.min(body.y.saturating_add(body.height).saturating_sub(y)),
-    )
 }
 
 fn task_card_rect_with_scroll(

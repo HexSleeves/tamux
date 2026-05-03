@@ -16,7 +16,6 @@ mod render_helpers;
 mod rendering;
 mod settings_handlers;
 mod workspace_actor_picker;
-mod workspace_create;
 mod workspace_create_modal;
 #[cfg(test)]
 mod workspace_create_modal_tests;

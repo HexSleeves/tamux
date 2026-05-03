@@ -171,6 +171,7 @@ fn tool_icon_classifies_action_families() {
     use zorai_protocol::tool_names;
 
     assert_eq!(tool_icon_for(tool_names::WEB_SEARCH, None).label, "web");
+    assert_eq!(tool_icon_for(tool_names::WEB_SEARCH, None).marker, "🌐");
     assert_eq!(tool_icon_for(tool_names::FETCH_URL, None).label, "web");
     assert_eq!(
         tool_icon_for(tool_names::BROWSER_NAVIGATE, None).label,
@@ -180,9 +181,14 @@ fn tool_icon_classifies_action_families() {
         tool_icon_for(tool_names::READ_GUIDELINE, None).label,
         "guide"
     );
+    assert_eq!(tool_icon_for(tool_names::READ_GUIDELINE, None).marker, "📖");
     assert_eq!(
         tool_icon_for(tool_names::DISCOVER_SKILLS, None).label,
         "skill"
+    );
+    assert_eq!(
+        tool_icon_for(tool_names::DISCOVER_SKILLS, None).marker,
+        "🧠"
     );
     assert_eq!(
         tool_icon_for(tool_names::PYTHON_EXECUTE, None).label,
@@ -192,6 +198,7 @@ fn tool_icon_classifies_action_families() {
         tool_icon_for(tool_names::BASH_COMMAND, None).label,
         "terminal"
     );
+    assert_eq!(tool_icon_for(tool_names::BASH_COMMAND, None).marker, "⌨");
     assert_eq!(
         tool_icon_for(
             tool_names::BASH_COMMAND,
@@ -241,6 +248,9 @@ fn tool_icon_classifies_action_families() {
             "{tool_name}"
         );
     }
+
+    assert_eq!(tool_icon_for(tool_names::GET_GIT_STATUS, None).marker, "⑂");
+    assert_eq!(tool_icon_for(tool_names::UPDATE_TODO, None).marker, "☑");
 }
 
 #[test]

@@ -1183,10 +1183,11 @@ fn workspace_hit_position(
         .find_map(|row| {
             (chat_area.x..chat_area.x.saturating_add(chat_area.width)).find_map(|column| {
                 let position = Position::new(column, row);
-                widgets::workspace_board::hit_test(
+                widgets::workspace_board::hit_test_with_scroll(
                     chat_area,
                     &model.workspace,
                     &model.workspace_expanded_task_ids,
+                    &model.workspace_board_scroll,
                     position,
                 )
                     .filter(|target| matches_target(target.clone()))

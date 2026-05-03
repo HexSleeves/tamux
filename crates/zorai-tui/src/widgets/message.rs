@@ -98,157 +98,157 @@ fn tool_icon_for(name: &str, arguments: Option<&str>) -> ToolIcon {
 
     if is_python_tool(&normalized_name, arguments) {
         return ToolIcon {
-            marker: "py",
+            marker: "🐍",
             label: "python",
         };
     }
     if is_web_tool(&normalized_name) {
         return ToolIcon {
-            marker: "web",
+            marker: "🌐",
             label: "web",
         };
     }
     if tool_names::GUIDELINE_TOOLS.contains(&normalized_name.as_str()) {
         return ToolIcon {
-            marker: "book",
+            marker: "📖",
             label: "guide",
         };
     }
     if tool_names::SKILL_TOOLS.contains(&normalized_name.as_str()) {
         return ToolIcon {
-            marker: "brain",
+            marker: "🧠",
             label: "skill",
         };
     }
     if normalized_name.contains(tool_names::GENERATED_TOOL_FRAGMENT) {
         return ToolIcon {
-            marker: "brain",
+            marker: "🧠",
             label: "skill",
         };
     }
     if is_plugin_tool(&normalized_name) {
         return ToolIcon {
-            marker: "plug",
+            marker: "🔌",
             label: "plugin",
         };
     }
     if is_collaboration_tool(&normalized_name) {
         return ToolIcon {
-            marker: "team",
+            marker: "👥",
             label: "collab",
         };
     }
     if is_memory_tool(&normalized_name) {
         return ToolIcon {
-            marker: "mem",
+            marker: "◈",
             label: "memory",
         };
     }
     if is_git_tool(&normalized_name) {
         return ToolIcon {
-            marker: "git",
+            marker: "⑂",
             label: "git",
         };
     }
     if is_file_tool(&normalized_name) {
         return ToolIcon {
-            marker: "file",
+            marker: "📄",
             label: "file",
         };
     }
     if is_search_tool(&normalized_name) {
         return ToolIcon {
-            marker: "find",
+            marker: "🔎",
             label: "search",
         };
     }
     if is_workspace_tool(&normalized_name) {
         return ToolIcon {
-            marker: "wksp",
+            marker: "▦",
             label: "workspace",
         };
     }
     if is_communication_tool(&normalized_name) {
         return ToolIcon {
-            marker: "msg",
+            marker: "✉",
             label: "comm",
         };
     }
     if is_audio_tool(&normalized_name) {
         return ToolIcon {
-            marker: "aud",
+            marker: "♪",
             label: "audio",
         };
     }
     if is_system_tool(&normalized_name) {
         return ToolIcon {
-            marker: "sys",
+            marker: "⚙",
             label: "system",
         };
     }
     if is_model_tool(&normalized_name) {
         return ToolIcon {
-            marker: "mod",
+            marker: "◇",
             label: "model",
         };
     }
     if is_agent_tool(&normalized_name) {
         return ToolIcon {
-            marker: "agt",
+            marker: "🤖",
             label: "agent",
         };
     }
     if is_todo_tool(&normalized_name) {
         return ToolIcon {
-            marker: "todo",
+            marker: "☑",
             label: "todo",
         };
     }
     if is_goal_tool(&normalized_name) {
         return ToolIcon {
-            marker: "goal",
+            marker: "🎯",
             label: "goal",
         };
     }
     if is_routine_tool(&normalized_name) {
         return ToolIcon {
-            marker: "rtn",
+            marker: "↻",
             label: "routine",
         };
     }
     if is_trigger_tool(&normalized_name) {
         return ToolIcon {
-            marker: "trig",
+            marker: "⚡",
             label: "trigger",
         };
     }
     if is_workflow_tool(&normalized_name) {
         return ToolIcon {
-            marker: "flow",
+            marker: "⇄",
             label: "workflow",
         };
     }
     if is_debate_tool(&normalized_name) {
         return ToolIcon {
-            marker: "deb",
+            marker: "⚖",
             label: "debate",
         };
     }
     if is_task_tool(&normalized_name) {
         return ToolIcon {
-            marker: "task",
+            marker: "◷",
             label: "task",
         };
     }
     if is_thread_tool(&normalized_name) {
         return ToolIcon {
-            marker: "thrd",
+            marker: "🧵",
             label: "thread",
         };
     }
     if is_terminal_tool(&normalized_name) {
         return ToolIcon {
-            marker: "term",
+            marker: "⌨",
             label: "terminal",
         };
     }
