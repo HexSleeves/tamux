@@ -8,7 +8,7 @@ use zorai_protocol::{AGENT_NAME_RAROG, AGENT_NAME_SWAROG};
 use crate::state::chat::{AgentThread, ChatState};
 use crate::state::modal::{ModalState, ThreadPickerTab};
 use crate::state::subagents::SubAgentsState;
-use crate::state::task::TaskState;
+use crate::state::task::{GoalRunStatus, TaskState, TaskStatus};
 use crate::state::workspace::WorkspaceState;
 use crate::theme::ThemeTokens;
 use crate::widgets::token_format::format_token_count;
@@ -41,6 +41,138 @@ struct ThreadPickerTabCell {
     tab: ThreadPickerTab,
     label: String,
     start: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThreadPickerStatus {
+    Running,
+    Paused,
+    Stopped,
+    Idle,
+}
+
+impl ThreadPickerStatus {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Paused => "paused",
+            Self::Stopped => "stopped",
+            Self::Idle => "idle",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ThreadPickerStatusIndex {
+    by_thread_id: std::collections::HashMap<String, ThreadPickerStatus>,
+}
+
+impl ThreadPickerStatusIndex {
+    fn from_state(chat: &ChatState, tasks: &TaskState) -> Self {
+        let mut index = Self::from_tasks(tasks);
+        for thread in chat.threads() {
+            if chat.is_thread_streaming(&thread.id) {
+                index.set_status(&thread.id, ThreadPickerStatus::Running);
+            } else if latest_assistant_message_is_stopped(thread) {
+                index.set_status(&thread.id, ThreadPickerStatus::Stopped);
+            }
+        }
+        index
+    }
+
+    fn status_for(&self, thread: &AgentThread) -> ThreadPickerStatus {
+        self.by_thread_id
+            .get(&thread.id)
+            .copied()
+            .unwrap_or_else(|| {
+                if latest_assistant_message_is_stopped(thread) {
+                    ThreadPickerStatus::Stopped
+                } else {
+                    ThreadPickerStatus::Idle
+                }
+            })
+    }
+
+    fn from_tasks(tasks: &TaskState) -> Self {
+        let mut index = Self::default();
+
+        for goal_run in tasks.goal_runs() {
+            let goal_status = status_from_goal_run(goal_run.status);
+            for thread_id in goal_run
+                .thread_id
+                .iter()
+                .chain(goal_run.root_thread_id.iter())
+                .chain(goal_run.active_thread_id.iter())
+            {
+                index.set_status(thread_id, goal_status);
+            }
+            for thread_id in &goal_run.execution_thread_ids {
+                index.set_status(thread_id, goal_status);
+            }
+        }
+
+        for task in tasks.tasks() {
+            if let Some(thread_id) = task.thread_id.as_deref() {
+                index.set_status(thread_id, status_from_task(task.status));
+            }
+        }
+
+        index
+    }
+
+    fn set_status(&mut self, thread_id: &str, status: ThreadPickerStatus) {
+        if thread_id.is_empty() || status == ThreadPickerStatus::Idle {
+            return;
+        }
+        let entry = self
+            .by_thread_id
+            .entry(thread_id.to_string())
+            .or_insert(ThreadPickerStatus::Idle);
+        if status_precedence(status) > status_precedence(*entry) {
+            *entry = status;
+        }
+    }
+}
+
+fn status_from_goal_run(status: Option<GoalRunStatus>) -> ThreadPickerStatus {
+    match status {
+        Some(
+            GoalRunStatus::Queued
+            | GoalRunStatus::Planning
+            | GoalRunStatus::Running
+            | GoalRunStatus::AwaitingApproval,
+        ) => ThreadPickerStatus::Running,
+        Some(GoalRunStatus::Paused) => ThreadPickerStatus::Paused,
+        Some(GoalRunStatus::Completed | GoalRunStatus::Failed | GoalRunStatus::Cancelled) => {
+            ThreadPickerStatus::Stopped
+        }
+        None => ThreadPickerStatus::Idle,
+    }
+}
+
+fn status_from_task(status: Option<TaskStatus>) -> ThreadPickerStatus {
+    match status {
+        Some(TaskStatus::Queued | TaskStatus::InProgress | TaskStatus::FailedAnalyzing) => {
+            ThreadPickerStatus::Running
+        }
+        Some(TaskStatus::AwaitingApproval | TaskStatus::Blocked) => ThreadPickerStatus::Paused,
+        Some(
+            TaskStatus::BudgetExceeded
+            | TaskStatus::Completed
+            | TaskStatus::Failed
+            | TaskStatus::Cancelled,
+        ) => ThreadPickerStatus::Stopped,
+        None => ThreadPickerStatus::Idle,
+    }
+}
+
+fn status_precedence(status: ThreadPickerStatus) -> u8 {
+    match status {
+        ThreadPickerStatus::Idle => 0,
+        ThreadPickerStatus::Stopped => 1,
+        ThreadPickerStatus::Paused => 2,
+        ThreadPickerStatus::Running => 3,
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -155,6 +287,23 @@ fn fixed_tab_specs() -> Vec<ThreadPickerTabSpec> {
             label: "[Gateway]".to_string(),
         },
     ]
+}
+
+fn thread_picker_status(
+    thread: &AgentThread,
+    chat: &ChatState,
+    tasks: &TaskState,
+) -> ThreadPickerStatus {
+    ThreadPickerStatusIndex::from_state(chat, tasks).status_for(thread)
+}
+
+fn latest_assistant_message_is_stopped(thread: &AgentThread) -> bool {
+    thread
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role == crate::state::chat::MessageRole::Assistant)
+        .is_some_and(|message| message.content.trim_end().ends_with("[stopped]"))
 }
 
 fn normalize_agent_tab_id(value: &str) -> Option<String> {
@@ -495,4 +644,3 @@ pub(crate) fn is_weles_thread(thread: &AgentThread) -> bool {
                 })
             }))
 }
-

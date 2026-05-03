@@ -221,7 +221,49 @@ fn push_syntax_highlighted(
     width: usize,
     theme: &ThemeTokens,
 ) {
-    for line in wrap_text(content, width.max(1)) {
-        lines.push(syntax_highlight_line(line, theme));
+    for physical_line in content.split('\n') {
+        for line in wrap_code_line_preserving_whitespace(physical_line, width.max(1)) {
+            lines.push(syntax_highlight_line(line, theme));
+        }
     }
+    if content.is_empty() {
+        lines.push(syntax_highlight_line(String::new(), theme));
+    }
+}
+
+fn wrap_code_line_preserving_whitespace(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![text.to_string()];
+    }
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut wrapped = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+
+    for ch in text.chars() {
+        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if current_width > 0 && current_width.saturating_add(ch_width) > width {
+            wrapped.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+
+        current.push(ch);
+        current_width = current_width.saturating_add(ch_width);
+
+        if current_width >= width {
+            wrapped.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+    }
+
+    if !current.is_empty() {
+        wrapped.push(current);
+    }
+    if wrapped.is_empty() {
+        wrapped.push(String::new());
+    }
+    wrapped
 }

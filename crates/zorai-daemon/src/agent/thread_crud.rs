@@ -623,6 +623,7 @@ impl AgentEngine {
 
     pub async fn delete_thread(&self, thread_id: &str) -> bool {
         self.ensure_thread_messages_loaded(thread_id).await;
+        let _ = self.stop_stream(thread_id).await;
         let thread_snapshot = self.threads.read().await.get(thread_id).cloned();
         let removed = self.threads.write().await.remove(thread_id).is_some();
         if removed {

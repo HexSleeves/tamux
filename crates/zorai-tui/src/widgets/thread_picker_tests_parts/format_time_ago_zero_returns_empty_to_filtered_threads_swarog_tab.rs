@@ -1,6 +1,6 @@
     use super::*;
     use crate::state::chat::{AgentThread, ChatAction};
-    use crate::state::task::{GoalRun, TaskAction, TaskState};
+    use crate::state::task::{AgentTask, GoalRun, GoalRunStatus, TaskAction, TaskState, TaskStatus};
     use crate::state::workspace::WorkspaceState;
     use crate::state::ModalAction;
     use crate::state::{SubAgentEntry, SubAgentsState};
@@ -58,6 +58,99 @@
             ..Default::default()
         }));
         tasks
+    }
+
+    #[test]
+    fn thread_picker_status_label_reflects_running_paused_and_stopped_threads() {
+        let chat = make_chat(vec![
+            AgentThread {
+                id: "thread-running".into(),
+                title: "Running thread".into(),
+                ..Default::default()
+            },
+            AgentThread {
+                id: "thread-paused".into(),
+                title: "Paused thread".into(),
+                ..Default::default()
+            },
+            AgentThread {
+                id: "thread-stopped".into(),
+                title: "Stopped thread".into(),
+                messages: vec![crate::state::chat::AgentMessage {
+                    role: crate::state::chat::MessageRole::Assistant,
+                    content: "partial response [stopped]".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        ]);
+        let mut tasks = TaskState::new();
+        tasks.reduce(TaskAction::TaskListReceived(vec![
+            AgentTask {
+                id: "task-running".into(),
+                thread_id: Some("thread-running".into()),
+                status: Some(TaskStatus::InProgress),
+                ..Default::default()
+            },
+            AgentTask {
+                id: "task-paused".into(),
+                thread_id: Some("thread-paused".into()),
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+        ]));
+        tasks.reduce(TaskAction::GoalRunDetailReceived(GoalRun {
+            id: "goal-stopped".into(),
+            title: "Stopped goal".into(),
+            thread_id: Some("thread-stopped".into()),
+            status: Some(GoalRunStatus::Cancelled),
+            ..Default::default()
+        }));
+
+        let running = chat
+            .threads()
+            .iter()
+            .find(|thread| thread.id == "thread-running")
+            .expect("running thread exists");
+        let paused = chat
+            .threads()
+            .iter()
+            .find(|thread| thread.id == "thread-paused")
+            .expect("paused thread exists");
+        let stopped = chat
+            .threads()
+            .iter()
+            .find(|thread| thread.id == "thread-stopped")
+            .expect("stopped thread exists");
+
+        assert_eq!(thread_picker_status(running, &chat, &tasks), ThreadPickerStatus::Running);
+        assert_eq!(thread_picker_status(paused, &chat, &tasks), ThreadPickerStatus::Paused);
+        assert_eq!(thread_picker_status(stopped, &chat, &tasks), ThreadPickerStatus::Stopped);
+    }
+
+    #[test]
+    fn thread_picker_status_index_precomputes_statuses_for_render_rows() {
+        let chat = make_chat(vec![AgentThread {
+            id: "thread-running".into(),
+            title: "Running thread".into(),
+            ..Default::default()
+        }]);
+        let mut tasks = TaskState::new();
+        tasks.reduce(TaskAction::TaskListReceived(vec![AgentTask {
+            id: "task-running".into(),
+            thread_id: Some("thread-running".into()),
+            status: Some(TaskStatus::InProgress),
+            ..Default::default()
+        }]));
+
+        let index = ThreadPickerStatusIndex::from_state(&chat, &tasks);
+
+        let thread = chat
+            .threads()
+            .iter()
+            .find(|thread| thread.id == "thread-running")
+            .expect("thread exists");
+        assert_eq!(index.status_for(thread), ThreadPickerStatus::Running);
     }
 
     fn workspace_task(id: &str, task_type: WorkspaceTaskType) -> WorkspaceTask {
@@ -486,4 +579,3 @@
         assert_eq!(threads.len(), 1);
         assert_eq!(threads[0].id, "thread-svarog");
     }
-

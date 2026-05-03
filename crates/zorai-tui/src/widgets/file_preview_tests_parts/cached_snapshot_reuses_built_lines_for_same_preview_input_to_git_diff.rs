@@ -302,3 +302,39 @@
             "expected string literal to use syntax color"
         );
     }
+
+    #[test]
+    fn syntax_highlighted_preview_preserves_indentation() {
+        let mut tasks = TaskState::default();
+        tasks.reduce(crate::state::task::TaskAction::FilePreviewReceived(
+            crate::state::task::FilePreview {
+                path: "/repo/evaluate_convgpt.py".to_string(),
+                content: [
+                    "def query_model():",
+                    "    payload = {",
+                    "        \"model\": \"convgpt\",",
+                    "    }",
+                ]
+                .join("\n"),
+                truncated: false,
+                is_text: true,
+            },
+        ));
+        let target = ChatFilePreviewTarget {
+            path: "/repo/evaluate_convgpt.py".to_string(),
+            repo_root: None,
+            repo_relative_path: None,
+        };
+        let lines = build_lines(
+            Rect::new(0, 0, 80, 20),
+            &tasks,
+            &target,
+            &ThemeTokens::default(),
+            0,
+        );
+        let first_indented = line_plain_text(&lines[FILE_PREVIEW_HEADER_LINES as usize + 1]);
+        let nested = line_plain_text(&lines[FILE_PREVIEW_HEADER_LINES as usize + 2]);
+
+        assert_eq!(first_indented, "    payload = {");
+        assert_eq!(nested, "        \"model\": \"convgpt\",");
+    }

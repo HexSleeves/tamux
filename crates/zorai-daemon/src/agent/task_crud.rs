@@ -30,6 +30,46 @@ pub(crate) fn enforce_goal_task_autonomy_tool_blacklist(task: &mut AgentTask) {
     }
 }
 
+fn push_unique_string(values: &mut Vec<String>, value: &str) -> bool {
+    if value.is_empty() || values.iter().any(|existing| existing == value) {
+        return false;
+    }
+    values.push(value.to_string());
+    true
+}
+
+fn declared_goal_task_ids(goal_run: &GoalRun) -> Vec<String> {
+    let mut task_ids = Vec::new();
+    if let Some(task_id) = goal_run.active_task_id.as_deref() {
+        push_unique_string(&mut task_ids, task_id);
+    }
+    for step in &goal_run.steps {
+        if let Some(task_id) = step.task_id.as_deref() {
+            push_unique_string(&mut task_ids, task_id);
+        }
+    }
+    for task_id in &goal_run.child_task_ids {
+        push_unique_string(&mut task_ids, task_id);
+    }
+    task_ids
+}
+
+fn declared_goal_thread_ids(goal_run: &GoalRun) -> Vec<String> {
+    let mut thread_ids = Vec::new();
+    for thread_id in goal_run
+        .thread_id
+        .iter()
+        .chain(goal_run.root_thread_id.iter())
+        .chain(goal_run.active_thread_id.iter())
+    {
+        push_unique_string(&mut thread_ids, thread_id);
+    }
+    for thread_id in &goal_run.execution_thread_ids {
+        push_unique_string(&mut thread_ids, thread_id);
+    }
+    thread_ids
+}
+
 #[derive(Debug, Clone, Copy)]
 struct GoalRunDetailWindow {
     loaded_step_start: usize,
@@ -1222,6 +1262,45 @@ impl AgentEngine {
         })
     }
 
+    async fn goal_related_task_ids(&self, goal_run: &GoalRun) -> Vec<String> {
+        let mut task_ids = declared_goal_task_ids(goal_run);
+        let mut thread_ids = declared_goal_thread_ids(goal_run);
+        let tasks = self.tasks.lock().await;
+
+        loop {
+            let mut changed = false;
+            for task in tasks.iter() {
+                let belongs_to_goal = task.goal_run_id.as_deref() == Some(goal_run.id.as_str())
+                    || task_ids.iter().any(|id| id == &task.id)
+                    || task
+                        .parent_task_id
+                        .as_deref()
+                        .is_some_and(|parent_task_id| {
+                            task_ids.iter().any(|id| id == parent_task_id)
+                        })
+                    || task
+                        .parent_thread_id
+                        .as_deref()
+                        .is_some_and(|parent_thread_id| {
+                            thread_ids.iter().any(|id| id == parent_thread_id)
+                        });
+                if !belongs_to_goal {
+                    continue;
+                }
+
+                changed |= push_unique_string(&mut task_ids, &task.id);
+                if let Some(thread_id) = task.thread_id.as_deref() {
+                    changed |= push_unique_string(&mut thread_ids, thread_id);
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+
+        task_ids
+    }
+
     pub async fn control_goal_run(
         &self,
         goal_run_id: &str,
@@ -1229,7 +1308,7 @@ impl AgentEngine {
         step_index: Option<usize>,
     ) -> bool {
         let mut changed_goal: Option<GoalRun> = None;
-        let mut task_to_cancel: Option<String> = None;
+        let mut tasks_to_cancel: Vec<String> = Vec::new();
         let mut task_to_release: Option<(String, Option<String>)> = None;
         {
             let mut goal_runs = self.goal_runs.lock().await;
@@ -1298,10 +1377,12 @@ impl AgentEngine {
                 }
                 "retry_step" | "retry-step" => {
                     let target_index = resolve_goal_run_control_step(goal_run, step_index);
-                    task_to_cancel = goal_run
+                    tasks_to_cancel = goal_run
                         .steps
                         .get(target_index)
-                        .and_then(|step| step.task_id.clone());
+                        .and_then(|step| step.task_id.clone())
+                        .into_iter()
+                        .collect();
                     if retry_goal_run_step(goal_run, step_index).is_ok() {
                         goal_run.updated_at = now_millis();
                         goal_run.awaiting_approval_id = None;
@@ -1316,10 +1397,12 @@ impl AgentEngine {
                 }
                 "rerun_from_step" | "rerun-from-step" => {
                     let target_index = resolve_goal_run_control_step(goal_run, step_index);
-                    task_to_cancel = goal_run
+                    tasks_to_cancel = goal_run
                         .steps
                         .get(target_index)
-                        .and_then(|step| step.task_id.clone());
+                        .and_then(|step| step.task_id.clone())
+                        .into_iter()
+                        .collect();
                     if rerun_goal_run_from_step(goal_run, step_index).is_ok() {
                         goal_run.updated_at = now_millis();
                         goal_run.awaiting_approval_id = None;
@@ -1347,10 +1430,7 @@ impl AgentEngine {
                         ));
                         goal_run.awaiting_approval_id = None;
                         goal_run.active_task_id = None;
-                        task_to_cancel = goal_run
-                            .steps
-                            .get(goal_run.current_step_index)
-                            .and_then(|step| step.task_id.clone());
+                        tasks_to_cancel = declared_goal_task_ids(goal_run);
                         changed_goal = Some(goal_run.clone());
                     }
                 }
@@ -1384,10 +1464,7 @@ impl AgentEngine {
                         ));
                         goal_run.awaiting_approval_id = None;
                         goal_run.active_task_id = None;
-                        task_to_cancel = goal_run
-                            .steps
-                            .get(goal_run.current_step_index)
-                            .and_then(|step| step.task_id.clone());
+                        tasks_to_cancel = declared_goal_task_ids(goal_run);
                         changed_goal = Some(goal_run.clone());
                     }
                 }
@@ -1427,7 +1504,15 @@ impl AgentEngine {
             }
         }
 
-        if let Some(task_id) = task_to_cancel {
+        if matches!(action, "cancel" | "stop") {
+            if let Some(goal_run) = changed_goal.as_ref() {
+                for task_id in self.goal_related_task_ids(goal_run).await {
+                    push_unique_string(&mut tasks_to_cancel, &task_id);
+                }
+            }
+        }
+
+        for task_id in tasks_to_cancel {
             let _ = self.cancel_task(&task_id).await;
         }
 

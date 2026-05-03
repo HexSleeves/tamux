@@ -2,8 +2,8 @@ use super::analysis::{classify_stalled_turn, follow_through_observed};
 use super::runtime::StalledTurnCandidate;
 use super::types::{StalledTurnClass, TurnEvidence};
 use crate::agent::types::{
-    AgentConfig, AgentMessage, AgentTask, AgentThread, ApiTransport, MessageRole, TaskPriority,
-    TaskStatus, ToolCall, ToolFunction,
+    AgentConfig, AgentMessage, AgentTask, AgentThread, ApiTransport, GoalRun, GoalRunStatus,
+    MessageRole, TaskPriority, TaskStatus, ToolCall, ToolFunction,
 };
 use crate::agent::{
     StreamProgressKind, ThreadHandoffState, ThreadResponderFrame, CONCIERGE_AGENT_ID,
@@ -279,6 +279,62 @@ fn spawned_task(thread_id: &str, task_id: &str, status: TaskStatus, now: u64) ->
         max_duration_secs: None,
         supervisor_config: None,
         sub_agent_def_id: None,
+    }
+}
+
+fn terminal_goal_run_for_thread(goal_run_id: &str, thread_id: &str, now: u64) -> GoalRun {
+    GoalRun {
+        id: goal_run_id.to_string(),
+        title: "Stopped goal".to_string(),
+        goal: "Do goal work".to_string(),
+        client_request_id: None,
+        status: GoalRunStatus::Cancelled,
+        priority: TaskPriority::Normal,
+        created_at: now.saturating_sub(120_000),
+        updated_at: now.saturating_sub(30_000),
+        started_at: Some(now.saturating_sub(120_000)),
+        completed_at: Some(now.saturating_sub(30_000)),
+        thread_id: Some(thread_id.to_string()),
+        root_thread_id: Some(thread_id.to_string()),
+        active_thread_id: Some(thread_id.to_string()),
+        execution_thread_ids: vec![thread_id.to_string()],
+        session_id: None,
+        current_step_index: 0,
+        current_step_title: None,
+        current_step_kind: None,
+        launch_assignment_snapshot: Vec::new(),
+        runtime_assignment_list: Vec::new(),
+        planner_owner_profile: None,
+        current_step_owner_profile: None,
+        replan_count: 0,
+        max_replans: 0,
+        plan_summary: None,
+        reflection_summary: None,
+        memory_updates: Vec::new(),
+        generated_skill_path: None,
+        last_error: None,
+        failure_cause: None,
+        stopped_reason: Some("operator_stop".to_string()),
+        child_task_ids: Vec::new(),
+        child_task_count: 0,
+        approval_count: 0,
+        awaiting_approval_id: None,
+        policy_fingerprint: None,
+        approval_expires_at: None,
+        containment_scope: None,
+        compensation_status: None,
+        compensation_summary: None,
+        active_task_id: None,
+        duration_ms: None,
+        steps: Vec::new(),
+        events: Vec::new(),
+        dossier: None,
+        total_prompt_tokens: 0,
+        total_completion_tokens: 0,
+        estimated_cost_usd: None,
+        model_usage: Vec::new(),
+        autonomy_level: super::super::autonomy::AutonomyLevel::Autonomous,
+        authorship_tag: None,
     }
 }
 
@@ -739,6 +795,50 @@ async fn collect_stalled_turn_observations_detects_idle_active_reasoning_stream(
     assert_eq!(
         observations[0].stream_progress_kind,
         Some(StreamProgressKind::Reasoning)
+    );
+}
+
+#[tokio::test]
+async fn collect_stalled_turn_observations_skips_idle_stream_for_cancelled_goal_thread() {
+    let engine = build_test_engine("Acknowledged.").await;
+    let now = super::now_millis();
+    let thread_id = "thread-cancelled-goal-stream";
+
+    {
+        let mut threads = engine.threads.write().await;
+        threads.insert(thread_id.to_string(), promise_thread(thread_id, now));
+    }
+    engine
+        .goal_runs
+        .lock()
+        .await
+        .push_back(terminal_goal_run_for_thread(
+            "goal-cancelled-stream",
+            thread_id,
+            now,
+        ));
+
+    let (generation, _, _) = engine.begin_stream_cancellation(thread_id).await;
+    engine
+        .note_stream_progress(
+            thread_id,
+            generation,
+            StreamProgressKind::Reasoning,
+            "still thinking after operator stop",
+        )
+        .await;
+    {
+        let mut streams = engine.stream_cancellations.lock().await;
+        let entry = streams
+            .get_mut(thread_id)
+            .expect("active stream entry should exist");
+        entry.last_progress_at = now.saturating_sub(31_000);
+    }
+
+    let observations = engine.collect_stalled_turn_observations().await;
+    assert!(
+        observations.is_empty(),
+        "cancelled goal threads must not be recovered by stalled-turn supervision"
     );
 }
 

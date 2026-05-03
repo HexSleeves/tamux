@@ -300,6 +300,25 @@ fn thread_deleted_event_removes_thread_from_chat_state() {
 }
 
 #[test]
+fn thread_deleted_event_refreshes_runtime_state() {
+    let (mut model, mut daemon_rx) = make_model_with_daemon_rx();
+    model.chat.reduce(chat::ChatAction::ThreadListReceived(vec![
+        chat::AgentThread {
+            id: "thread-1".into(),
+            title: "Thread One".into(),
+            ..Default::default()
+        },
+    ]));
+
+    model.handle_client_event(ClientEvent::ThreadDeleted {
+        thread_id: "thread-1".into(),
+        deleted: true,
+    });
+
+    assert!(matches!(daemon_rx.try_recv(), Ok(DaemonCommand::Refresh)));
+}
+
+#[test]
 fn stale_thread_detail_after_delete_does_not_recreate_thread() {
     let mut model = make_model();
     model.chat.reduce(chat::ChatAction::ThreadListReceived(vec![
@@ -428,4 +447,3 @@ fn thread_deleted_event_reclamps_open_thread_picker_cursor() {
         Some("thread-1")
     );
 }
-

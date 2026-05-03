@@ -431,6 +431,51 @@ fn thread_picker_delete_requires_confirmation_before_sending_delete_thread() {
 }
 
 #[test]
+fn thread_picker_delete_stops_streaming_thread_before_delete() {
+    let (mut model, mut daemon_rx) = make_model();
+    model.chat.reduce(chat::ChatAction::ThreadListReceived(vec![
+        chat::AgentThread {
+            id: "thread-1".into(),
+            agent_name: Some("Svarog".into()),
+            title: "Thread One".into(),
+            ..Default::default()
+        },
+    ]));
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-1".to_string()));
+    model.chat.reduce(chat::ChatAction::Delta {
+        thread_id: "thread-1".to_string(),
+        content: "working".to_string(),
+    });
+    model
+        .modal
+        .reduce(modal::ModalAction::Push(modal::ModalKind::ThreadPicker));
+    model.sync_thread_picker_item_count();
+    model.modal.reduce(modal::ModalAction::Navigate(1));
+
+    model.handle_key_modal(
+        KeyCode::Delete,
+        KeyModifiers::NONE,
+        modal::ModalKind::ThreadPicker,
+    );
+    model.handle_key_modal(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+        modal::ModalKind::ChatActionConfirm,
+    );
+
+    assert!(matches!(
+        daemon_rx.try_recv().expect("expected stop-stream command"),
+        DaemonCommand::StopStream { thread_id } if thread_id == "thread-1"
+    ));
+    assert!(matches!(
+        daemon_rx.try_recv().expect("expected delete-thread command"),
+        DaemonCommand::DeleteThread { thread_id } if thread_id == "thread-1"
+    ));
+}
+
+#[test]
 fn thread_picker_ctrl_s_busy_thread_requires_confirmation_before_stop() {
     let (mut model, mut daemon_rx) = make_model();
     model.chat.reduce(chat::ChatAction::ThreadListReceived(vec![
@@ -477,4 +522,3 @@ fn thread_picker_ctrl_s_busy_thread_requires_confirmation_before_stop() {
         DaemonCommand::StopStream { thread_id } if thread_id == "thread-1"
     ));
 }
-

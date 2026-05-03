@@ -90,6 +90,7 @@ impl TuiModel {
                         thread_id: thread_id.clone(),
                     });
                     self.sync_open_thread_picker();
+                    self.send_daemon_command(DaemonCommand::Refresh);
                     self.status_line = "Thread deleted".to_string();
                 } else {
                     self.deleted_thread_ids.remove(&thread_id);

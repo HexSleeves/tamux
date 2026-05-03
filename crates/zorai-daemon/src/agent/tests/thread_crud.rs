@@ -153,6 +153,34 @@ async fn delete_thread_removes_persisted_thread_after_hydrate() {
 }
 
 #[tokio::test]
+async fn delete_thread_cancels_active_stream() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let thread_id = "thread-delete-active-stream";
+
+    engine.threads.write().await.insert(
+        thread_id.to_string(),
+        make_thread(
+            thread_id,
+            Some(crate::agent::agent_identity::MAIN_AGENT_NAME),
+            "Active Stream",
+            false,
+            10,
+            20,
+            vec![AgentMessage::user("keep working", 10)],
+        ),
+    );
+    let (_generation, token, _retry_now) = engine.begin_stream_cancellation(thread_id).await;
+
+    assert!(engine.delete_thread(thread_id).await);
+    assert!(
+        token.is_cancelled(),
+        "deleting a thread should stop its active stream"
+    );
+}
+
+#[tokio::test]
 async fn list_threads_filters_visible_threads_by_default() {
     let root = tempdir().expect("temp dir");
     let manager = SessionManager::new_test(root.path()).await;

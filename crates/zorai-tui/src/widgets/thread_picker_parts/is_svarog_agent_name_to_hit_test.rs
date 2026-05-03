@@ -345,6 +345,7 @@ pub fn render_for_workspace(
         Some(&goal_index),
         Some(&workspace_index),
     );
+    let status_index = ThreadPickerStatusIndex::from_state(chat, tasks);
 
     let cursor = modal.picker_cursor();
     let list_h = list_row.height as usize;
@@ -380,6 +381,14 @@ pub fn render_for_workspace(
                         } else {
                             theme.fg_dim
                         };
+                        let status = status_index.status_for(thread);
+                        let status_style = match status {
+                            ThreadPickerStatus::Running => theme.accent_success,
+                            ThreadPickerStatus::Paused => theme.accent_secondary,
+                            ThreadPickerStatus::Stopped => theme.accent_danger,
+                            ThreadPickerStatus::Idle => theme.fg_dim,
+                        };
+                        let status_label = format!("[{}]", status.label());
 
                         let time_str = format_time_ago(thread.updated_at);
                         let tokens = thread.total_input_tokens + thread.total_output_tokens;
@@ -390,7 +399,9 @@ pub fn render_for_workspace(
                             Some(&goal_index),
                             Some(&workspace_index),
                         );
-                        let max_title = inner_w.saturating_sub(25);
+                        let max_title = inner_w
+                            .saturating_sub(28)
+                            .saturating_sub(status_label.chars().count());
                         let title = if display_title.chars().count() > max_title && max_title > 3 {
                             format!(
                                 "{}...",
@@ -407,6 +418,8 @@ pub fn render_for_workspace(
                             ListItem::new(Line::from(vec![
                                 Span::styled("\u{25cf}", dot_style),
                                 Span::raw(" "),
+                                Span::raw(status_label.clone()),
+                                Span::raw(" "),
                                 Span::raw(title),
                                 Span::raw("  "),
                                 Span::raw(time_str),
@@ -418,6 +431,8 @@ pub fn render_for_workspace(
                             ListItem::new(Line::from(vec![
                                 Span::raw("  "),
                                 Span::styled("\u{25cf}", dot_style),
+                                Span::raw(" "),
+                                Span::styled(status_label, status_style),
                                 Span::raw(" "),
                                 Span::styled(title, theme.fg_active),
                                 Span::raw("  "),
@@ -475,4 +490,3 @@ pub fn hit_test(
     let workspace = WorkspaceState::new();
     hit_test_for_workspace(area, chat, modal, subagents, &tasks, &workspace, mouse)
 }
-

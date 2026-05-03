@@ -333,6 +333,17 @@ impl TuiModel {
                 self.delete_message(message_index)
             }
             PendingConfirmAction::DeleteThread { thread_id, .. } => {
+                let was_streaming = self.chat.is_thread_streaming(&thread_id);
+                if was_streaming {
+                    if self.chat.active_thread_id() == Some(thread_id.as_str()) {
+                        self.cancelled_thread_id = Some(thread_id.clone());
+                        self.chat.reduce(chat::ChatAction::ForceStopStreaming);
+                        self.clear_active_thread_activity();
+                    }
+                    self.send_daemon_command(DaemonCommand::StopStream {
+                        thread_id: thread_id.clone(),
+                    });
+                }
                 self.send_daemon_command(DaemonCommand::DeleteThread {
                     thread_id: thread_id.clone(),
                 });
