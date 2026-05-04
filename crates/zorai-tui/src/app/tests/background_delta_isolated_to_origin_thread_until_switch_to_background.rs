@@ -205,6 +205,66 @@ fn sticky_thread_activity_phase_labels_rotate_during_same_event() {
 }
 
 #[test]
+fn stale_done_before_first_stream_does_not_clear_pending_prompt_activity() {
+    let mut model = build_model();
+    model.connected = true;
+    model.agent_config_loaded = true;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-user".to_string(),
+        title: "User Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-user".to_string()));
+
+    model.submit_prompt("next question".to_string());
+
+    assert_eq!(model.footer_activity_text().as_deref(), Some("thinking"));
+    assert!(
+        model.pending_prompt_response_threads
+            .contains("thread-user"),
+        "submitted prompt should mark the thread as awaiting first response activity"
+    );
+
+    model.handle_client_event(ClientEvent::Done {
+        thread_id: "thread-user".to_string(),
+        input_tokens: 100,
+        output_tokens: 200,
+        cost: None,
+        provider: None,
+        model: None,
+        tps: None,
+        generation_ms: None,
+        reasoning: None,
+        provider_final_result_json: None,
+    });
+
+    assert_eq!(
+        model.footer_activity_text().as_deref(),
+        Some("thinking"),
+        "a done event before first output should not clear pending prompt activity"
+    );
+    assert!(
+        model.pending_prompt_response_threads
+            .contains("thread-user"),
+        "stale done should leave first-response pending state intact"
+    );
+
+    model.handle_client_event(ClientEvent::Delta {
+        thread_id: "thread-user".to_string(),
+        content: "new answer".to_string(),
+    });
+
+    assert_eq!(model.footer_activity_text().as_deref(), Some("writing"));
+    assert!(
+        !model
+            .pending_prompt_response_threads
+            .contains("thread-user"),
+        "first output should consume the pending prompt marker"
+    );
+}
+
+#[test]
 fn background_delta_isolated_to_origin_thread_until_switch() {
     let mut model = build_model();
     seed_two_visible_threads(&mut model);

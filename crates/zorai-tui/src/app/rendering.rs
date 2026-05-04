@@ -202,6 +202,43 @@ fn render_runtime_effort_picker(
 }
 
 impl TuiModel {
+    fn sticky_thread_activity_text(&self, activity: &str) -> String {
+        let normalized = activity.trim().to_ascii_lowercase();
+        let variants = if normalized == "thinking"
+            || normalized == "reasoning"
+            || normalized == "skill gate"
+        {
+            &[
+                "thinking",
+                "analyzing",
+                "working through",
+                "mapping context",
+                "sorting context",
+            ][..]
+        } else if normalized == "writing" || normalized.contains("crafting response") {
+            &[
+                "crafting",
+                "writing",
+                "composing",
+                "drafting",
+                "shaping reply",
+            ][..]
+        } else if normalized.starts_with('\u{2699}') || normalized.contains("tool") {
+            &[
+                "calling tools",
+                "using tools",
+                "checking tools",
+                "running tools",
+                "waiting on tools",
+            ][..]
+        } else {
+            return activity.trim().to_string();
+        };
+        let variant_index = ((self.tick_counter / 40) as usize) % variants.len();
+
+        variants[variant_index].to_string()
+    }
+
     fn latest_daemon_turn_context_tokens(thread: &chat::AgentThread) -> u64 {
         thread.latest_turn_context_tokens.unwrap_or_else(|| {
             thread
@@ -1781,6 +1818,11 @@ impl TuiModel {
             widgets::anticipatory::render(frame, chunks[2], &self.anticipatory, &self.theme);
         }
 
+        let footer_activity = self.footer_activity_text();
+        let sticky_activity = footer_activity
+            .as_deref()
+            .map(|activity| self.sticky_thread_activity_text(activity));
+
         if concierge_height > 0 {
             widgets::concierge::render(
                 frame,
@@ -1789,10 +1831,10 @@ impl TuiModel {
                 &self.chat,
                 &self.theme,
                 self.focus == FocusArea::Chat,
+                sticky_activity.as_deref(),
             );
         }
 
-        let footer_activity = self.footer_activity_text();
         let thread_budget_notice = self.active_thread_budget_exceeded_notice();
         let footer_notice = thread_budget_notice
             .as_deref()
@@ -1807,7 +1849,7 @@ impl TuiModel {
             self.modal.top().is_some(),
             &self.attachments,
             self.tick_counter,
-            footer_activity.as_deref(),
+            None,
             footer_notice,
         );
         widgets::footer::render_status_bar(

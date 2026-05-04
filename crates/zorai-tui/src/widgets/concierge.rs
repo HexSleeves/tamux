@@ -24,11 +24,12 @@ pub fn action_line_segments(actions: &[MessageAction], area: Rect) -> Vec<(usize
     segments
 }
 
-/// Render the actions bar widget.
+/// Render the sticky thread activity/actions bar widget.
 ///
 /// Shows actions from the active thread's last actionable message (concierge
 /// welcome actions, assistant question choices, tool confirmations, etc.).
-/// Message content is shown in the chat pane — this widget only shows buttons.
+/// Message content is shown in the chat pane; this widget only shows buttons
+/// and transient thread activity.
 pub fn render(
     frame: &mut Frame,
     area: Rect,
@@ -36,22 +37,30 @@ pub fn render(
     chat: &ChatState,
     theme: &ThemeTokens,
     focused: bool,
+    thread_activity: Option<&str>,
 ) {
     let actions = chat.active_actions();
     let has_actions = !actions.is_empty();
+    let thread_activity = thread_activity.filter(|activity| !activity.trim().is_empty());
 
-    if area.height == 0 || area.width < 8 || (!concierge.loading && !has_actions) {
+    if area.height == 0
+        || area.width < 8
+        || (!concierge.loading && !has_actions && thread_activity.is_none())
+    {
         return;
     }
 
     let mut lines = Vec::new();
+    if area.height > 1 {
+        lines.push(Line::raw(""));
+    }
+    let spinner_frames = [
+        "\u{28bf}", "\u{28fb}", "\u{28fd}", "\u{28fe}", "\u{28f7}", "\u{28ef}", "\u{28df}",
+        "\u{287f}",
+    ];
 
     if concierge.loading {
         // Single line: "Concierge ⣻ working…"
-        let spinner_frames = [
-            "\u{28bf}", "\u{28fb}", "\u{28fd}", "\u{28fe}", "\u{28f7}", "\u{28ef}", "\u{28df}",
-            "\u{287f}",
-        ];
         let status_frames = [
             "working",
             "grinding",
@@ -95,6 +104,18 @@ pub fn render(
             action_spans.push(Span::styled(label, style));
         }
         lines.push(Line::from(action_spans));
+    } else if let Some(activity) = thread_activity {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis() as usize)
+            .unwrap_or(0);
+        let spinner = spinner_frames[(now / 120) % spinner_frames.len()];
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(spinner, theme.accent_secondary),
+            Span::raw(" "),
+            Span::styled(format!("{activity}\u{2026}"), theme.fg_dim),
+        ]));
     }
 
     frame.render_widget(Paragraph::new(lines), area);

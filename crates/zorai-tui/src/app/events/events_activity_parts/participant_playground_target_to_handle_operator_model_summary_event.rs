@@ -290,6 +290,9 @@ impl TuiModel {
         {
             return;
         }
+        if self.done_arrived_before_pending_prompt_output(thread_id.as_str()) {
+            return;
+        }
         self.clear_bootstrap_pending_activity_thread(thread_id.as_str());
         self.clear_pending_prompt_response_thread(thread_id.as_str());
         self.clear_agent_activity_for(Some(thread_id.as_str()));

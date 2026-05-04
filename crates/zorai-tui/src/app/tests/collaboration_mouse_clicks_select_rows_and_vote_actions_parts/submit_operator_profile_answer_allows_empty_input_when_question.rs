@@ -167,18 +167,7 @@ fn clicking_bottom_action_bar_submits_operator_question_answer() {
     });
     model.chat.select_message(Some(0));
 
-    let input_start_row = model.height.saturating_sub(model.input_height() + 1);
-    let concierge_height = if model.chat.active_actions().is_empty() {
-        0
-    } else {
-        1
-    };
-    let concierge_area = Rect::new(
-        0,
-        input_start_row.saturating_sub(concierge_height),
-        model.width,
-        concierge_height,
-    );
+    let concierge_area = model.pane_layout().concierge;
     let action_pos = (concierge_area.y..concierge_area.y.saturating_add(concierge_area.height))
         .find_map(|row| {
             (concierge_area.x..concierge_area.x.saturating_add(concierge_area.width)).find_map(|column| {
@@ -468,4 +457,3 @@ fn collaboration_enter_in_detail_sends_vote_command() {
         other => panic!("unexpected command: {other:?}"),
     }
 }
-

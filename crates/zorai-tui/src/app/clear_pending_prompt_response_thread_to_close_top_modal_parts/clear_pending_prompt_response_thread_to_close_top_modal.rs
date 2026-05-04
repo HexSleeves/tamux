@@ -40,6 +40,33 @@ impl TuiModel {
                 .unwrap_or(false)
     }
 
+    fn done_arrived_before_pending_prompt_output(&self, thread_id: &str) -> bool {
+        self.pending_prompt_response_threads.contains(thread_id)
+            && self
+                .thread_agent_activity
+                .get(thread_id)
+                .map(String::as_str)
+                == Some("thinking")
+            && !self.chat.is_thread_streaming(thread_id)
+            && self
+                .chat
+                .threads()
+                .iter()
+                .find(|thread| thread.id == thread_id)
+                .and_then(|thread| {
+                    thread
+                        .messages
+                        .iter()
+                        .rev()
+                        .find(|message| {
+                            !message.content.trim().is_empty()
+                                && !matches!(message.role, chat::MessageRole::System)
+                        })
+                        .map(|message| message.role == chat::MessageRole::User)
+                })
+                .unwrap_or(false)
+    }
+
     fn clear_agent_activity_for(&mut self, thread_id: Option<&str>) {
         if let Some(thread_id) = thread_id {
             self.thread_agent_activity.remove(thread_id);
@@ -114,7 +141,9 @@ impl TuiModel {
             return false;
         }
 
-        self.concierge.loading || !self.chat.active_actions().is_empty()
+        self.concierge.loading
+            || !self.chat.active_actions().is_empty()
+            || self.footer_activity_text().is_some()
     }
 
     fn should_show_daemon_connection_loading(&self) -> bool {
@@ -149,7 +178,7 @@ impl TuiModel {
         if self.should_show_concierge_hero_loading() {
             0
         } else if self.actions_bar_visible() {
-            1
+            2
         } else {
             0
         }

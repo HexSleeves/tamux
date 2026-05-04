@@ -350,7 +350,7 @@ impl TuiModel {
                     .and_then(|thread| thread.messages.get(sel))
                     .map(|msg| {
                         (msg.role == chat::MessageRole::Assistant && msg.reasoning.is_some())
-                            || widgets::message::is_meta_cognition_message(msg)
+                            || widgets::message::is_collapsible_system_notice_message(msg)
                     })
                     .unwrap_or(false);
                 if has_reasoning {

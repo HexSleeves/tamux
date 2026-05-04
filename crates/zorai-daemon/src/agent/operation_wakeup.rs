@@ -6,6 +6,7 @@ pub(super) struct OperationWakeup {
     pub(super) thread_id: String,
     pub(super) tool_name: String,
     pub(super) registered_at: u64,
+    pub(super) terminal_observed_at: Option<u64>,
 }
 
 impl AgentEngine {
@@ -29,6 +30,7 @@ impl AgentEngine {
                 thread_id: thread_id.to_string(),
                 tool_name: tool_name.to_string(),
                 registered_at: now_millis(),
+                terminal_observed_at: None,
             });
     }
 
@@ -62,6 +64,13 @@ impl AgentEngine {
             let wakeups = self.operation_wakeups.lock().await;
             wakeups.values().cloned().collect::<Vec<_>>()
         };
+        let now = now_millis();
+        let mut terminal_wakeups_by_thread: std::collections::BTreeMap<
+            String,
+            Vec<(OperationWakeup, serde_json::Value)>,
+        > = std::collections::BTreeMap::new();
+        let mut latest_terminal_observed_by_thread: std::collections::BTreeMap<String, u64> =
+            std::collections::BTreeMap::new();
 
         for wakeup in wakeups {
             let Some(status) = self.operation_wakeup_status(&wakeup).await? else {
@@ -71,16 +80,61 @@ impl AgentEngine {
                 continue;
             }
 
-            let claimed = {
+            let Some(terminal_observed_at) = ({
                 let mut wakeups = self.operation_wakeups.lock().await;
-                wakeups.remove(&wakeup.operation_id).is_some()
+                wakeups
+                    .get_mut(&wakeup.operation_id)
+                    .map(|stored| *stored.terminal_observed_at.get_or_insert(now))
+            }) else {
+                continue;
             };
-            if !claimed {
+
+            latest_terminal_observed_by_thread
+                .entry(wakeup.thread_id.clone())
+                .and_modify(|latest| *latest = (*latest).max(terminal_observed_at))
+                .or_insert(terminal_observed_at);
+            terminal_wakeups_by_thread
+                .entry(wakeup.thread_id.clone())
+                .or_default()
+                .push((wakeup, status));
+        }
+
+        for (thread_id, grouped_wakeups) in terminal_wakeups_by_thread {
+            let latest_observed_at = latest_terminal_observed_by_thread
+                .get(&thread_id)
+                .copied()
+                .unwrap_or(now);
+            if latest_observed_at.saturating_add(operation_wakeup_debounce_ms()) > now {
                 continue;
             }
 
-            self.perform_operation_completion_wakeup(&wakeup, status)
-                .await;
+            let claimed_wakeups = {
+                let mut wakeups = self.operation_wakeups.lock().await;
+                grouped_wakeups
+                    .into_iter()
+                    .filter(|(wakeup, _)| wakeups.remove(&wakeup.operation_id).is_some())
+                    .collect::<Vec<_>>()
+            };
+            if claimed_wakeups.is_empty() {
+                continue;
+            }
+            if self
+                .perform_operation_completion_wakeup_batch(&thread_id, &claimed_wakeups)
+                .await
+            {
+                self.enqueue_operation_completion_continuation(&thread_id)
+                    .await;
+                if let Err(error) = self
+                    .flush_deferred_visible_thread_continuations(&thread_id)
+                    .await
+                {
+                    tracing::warn!(
+                        thread_id = %thread_id,
+                        error = %error,
+                        "operation completion wakeup continuation flush failed"
+                    );
+                }
+            }
         }
 
         Ok(())
@@ -153,40 +207,74 @@ impl AgentEngine {
         Ok(Some(payload))
     }
 
-    async fn perform_operation_completion_wakeup(
+    async fn perform_operation_completion_wakeup_batch(
         &self,
-        wakeup: &OperationWakeup,
-        status: serde_json::Value,
-    ) {
-        let state = status
-            .get("state")
-            .and_then(|value| value.as_str())
-            .unwrap_or("unknown");
-        let message = format!(
-            "Background operation finished.\n\noperation_id: {}\ntool: {}\nstate: {}\nregistered_at: {}\n\nOperation status:\n{}",
-            wakeup.operation_id, wakeup.tool_name, state, wakeup.registered_at, status
-        );
+        thread_id: &str,
+        wakeups: &[(OperationWakeup, serde_json::Value)],
+    ) -> bool {
+        let message = if wakeups.len() == 1 {
+            let (wakeup, status) = &wakeups[0];
+            let state = status
+                .get("state")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown");
+            format!(
+                "Background operation finished.\n\noperation_id: {}\ntool: {}\nstate: {}\nregistered_at: {}\n\nOperation status:\n{}",
+                wakeup.operation_id, wakeup.tool_name, state, wakeup.registered_at, status
+            )
+        } else {
+            let results = wakeups
+                .iter()
+                .map(operation_wakeup_result_payload)
+                .collect::<Vec<_>>();
+            format!(
+                "Background operations finished.\n\nOperation results:\n{}",
+                serde_json::Value::Array(results)
+            )
+        };
 
-        if !self
-            .append_system_thread_message(&wakeup.thread_id, message.clone())
-            .await
-        {
-            return;
+        if !self.append_system_thread_message(thread_id, message).await {
+            return false;
         }
 
+        if wakeups.len() == 1 {
+            let (wakeup, status) = &wakeups[0];
+            let state = status
+                .get("state")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown");
+            self.emit_workflow_notice(
+                thread_id,
+                "operation-completion-wakeup",
+                format!(
+                    "Background operation {} reached terminal state: {state}.",
+                    wakeup.operation_id
+                ),
+                Some(status.to_string()),
+            );
+            return true;
+        }
+
+        let results = wakeups
+            .iter()
+            .map(operation_wakeup_result_payload)
+            .collect::<Vec<_>>();
         self.emit_workflow_notice(
-            &wakeup.thread_id,
+            thread_id,
             "operation-completion-wakeup",
             format!(
-                "Background operation {} reached terminal state: {state}.",
-                wakeup.operation_id
+                "{} background operations reached terminal states.",
+                wakeups.len()
             ),
-            Some(status.to_string()),
+            Some(serde_json::Value::Array(results).to_string()),
         );
+        true
+    }
 
+    async fn enqueue_operation_completion_continuation(&self, thread_id: &str) {
         let prior_user_message = {
             let threads = self.threads.read().await;
-            threads.get(&wakeup.thread_id).and_then(|thread| {
+            threads.get(thread_id).and_then(|thread| {
                 thread
                     .messages
                     .iter()
@@ -200,15 +288,13 @@ impl AgentEngine {
             return;
         };
 
-        let task_id = self
-            .operation_wakeup_active_task_id(&wakeup.thread_id)
-            .await;
+        let task_id = self.operation_wakeup_active_task_id(thread_id).await;
         let agent_id = self
-            .active_agent_id_for_thread(&wakeup.thread_id)
+            .active_agent_id_for_thread(thread_id)
             .await
             .unwrap_or_else(|| MAIN_AGENT_ID.to_string());
         self.enqueue_visible_thread_continuation(
-            &wakeup.thread_id,
+            thread_id,
             DeferredVisibleThreadContinuation {
                 agent_id,
                 task_id,
@@ -221,20 +307,30 @@ impl AgentEngine {
             },
         )
         .await;
-
-        if let Err(error) = self
-            .flush_deferred_visible_thread_continuations(&wakeup.thread_id)
-            .await
-        {
-            tracing::warn!(
-                operation_id = %wakeup.operation_id,
-                thread_id = %wakeup.thread_id,
-                error = %error,
-                "operation completion wakeup continuation flush failed"
-            );
-        }
     }
+}
 
+fn operation_wakeup_result_payload(
+    (wakeup, status): &(OperationWakeup, serde_json::Value),
+) -> serde_json::Value {
+    let state = status
+        .get("state")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+    serde_json::json!({
+        "operation_id": wakeup.operation_id,
+        "tool": wakeup.tool_name,
+        "state": state,
+        "registered_at": wakeup.registered_at,
+        "status": status,
+    })
+}
+
+fn operation_wakeup_debounce_ms() -> u64 {
+    30_000
+}
+
+impl AgentEngine {
     async fn operation_wakeup_active_task_id(&self, thread_id: &str) -> Option<String> {
         let tasks = self.tasks.lock().await;
         tasks
@@ -311,6 +407,18 @@ mod tests {
         Ok(String::new())
     }
 
+    async fn mark_operation_wakeup_debounce_elapsed(engine: &AgentEngine, operation_id: &str) {
+        let mut wakeups = engine.operation_wakeups.lock().await;
+        let Some(wakeup) = wakeups.get_mut(operation_id) else {
+            panic!("operation wakeup should be registered: {operation_id}");
+        };
+        wakeup.terminal_observed_at = Some(
+            now_millis()
+                .saturating_sub(operation_wakeup_debounce_ms())
+                .saturating_sub(1),
+        );
+    }
+
     #[tokio::test]
     async fn completed_operation_appends_single_thread_wakeup_message() {
         let root = tempdir().expect("tempdir should succeed");
@@ -360,6 +468,7 @@ mod tests {
                 "stdout": "done",
             }),
         );
+        mark_operation_wakeup_debounce_elapsed(&engine, &operation.operation_id).await;
 
         engine
             .supervise_operation_completion_wakeups()
@@ -386,6 +495,96 @@ mod tests {
             .count();
         assert_eq!(wakeups, 1);
         assert!(engine.pending_operation_wakeup_count().await == 0);
+    }
+
+    #[tokio::test]
+    async fn completed_operation_wakeup_waits_for_debounce_window() {
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+        let thread_id = "thread-operation-wakeup-debounce";
+        let now = now_millis();
+        {
+            let mut threads = engine.threads.write().await;
+            threads.insert(
+                thread_id.to_string(),
+                AgentThread {
+                    id: thread_id.to_string(),
+                    agent_name: None,
+                    title: "Operation wakeup debounce".to_string(),
+                    messages: vec![AgentMessage::user("run the long command", now)],
+                    pinned: false,
+                    upstream_thread_id: None,
+                    upstream_transport: None,
+                    upstream_provider: None,
+                    upstream_model: None,
+                    upstream_assistant_id: None,
+                    created_at: now,
+                    updated_at: now,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                },
+            );
+        }
+
+        let operation = crate::server::operation_registry()
+            .accept_operation(zorai_protocol::tool_names::BASH_COMMAND, None);
+        crate::server::operation_registry().mark_started(&operation.operation_id);
+        engine
+            .register_operation_wakeup(
+                thread_id,
+                zorai_protocol::tool_names::BASH_COMMAND,
+                &operation.operation_id,
+            )
+            .await;
+        crate::server::operation_registry().mark_completed_with_terminal_result(
+            &operation.operation_id,
+            serde_json::json!({
+                "command": "sleep 1 && echo done",
+                "exit_code": 0,
+                "duration_ms": 1000,
+                "stdout": "done",
+            }),
+        );
+
+        engine
+            .supervise_operation_completion_wakeups()
+            .await
+            .expect("operation wakeup supervision should succeed");
+
+        {
+            let threads = engine.threads.read().await;
+            let thread = threads
+                .get(thread_id)
+                .expect("thread should remain available");
+            assert!(
+                thread
+                    .messages
+                    .iter()
+                    .all(|message| !message.content.contains("Background operation finished")),
+                "terminal wakeup should wait for the debounce window before notifying the thread"
+            );
+        }
+        assert_eq!(engine.pending_operation_wakeup_count().await, 1);
+
+        mark_operation_wakeup_debounce_elapsed(&engine, &operation.operation_id).await;
+        engine
+            .supervise_operation_completion_wakeups()
+            .await
+            .expect("operation wakeup supervision should succeed after debounce");
+
+        let threads = engine.threads.read().await;
+        let thread = threads
+            .get(thread_id)
+            .expect("thread should remain available");
+        assert!(
+            thread
+                .messages
+                .iter()
+                .any(|message| message.content.contains("Background operation finished")),
+            "debounced wakeup should be appended once the window has elapsed"
+        );
+        assert_eq!(engine.pending_operation_wakeup_count().await, 0);
     }
 
     #[tokio::test]
@@ -438,6 +637,7 @@ mod tests {
                 "stdout": "done",
             }),
         );
+        mark_operation_wakeup_debounce_elapsed(&engine, &operation.operation_id).await;
 
         let supervisors = 16;
         let barrier = Arc::new(tokio::sync::Barrier::new(supervisors));
@@ -473,6 +673,162 @@ mod tests {
             "racing supervisors must not append duplicate completion wakeups for the same operation"
         );
         assert!(engine.pending_operation_wakeup_count().await == 0);
+    }
+
+    #[tokio::test]
+    async fn same_thread_operation_wakeups_coalesce_to_one_continuation() {
+        let root = tempdir().expect("tempdir should succeed");
+        let manager = SessionManager::new_test(root.path()).await;
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind operation wakeup test server");
+        let addr = listener.local_addr().expect("operation wakeup addr");
+        let request_counter = Arc::new(AtomicUsize::new(0));
+
+        tokio::spawn({
+            let request_counter = request_counter.clone();
+            async move {
+                loop {
+                    let Ok((mut socket, _)) = listener.accept().await else {
+                        break;
+                    };
+                    let request_counter = request_counter.clone();
+                    tokio::spawn(async move {
+                        let _body = read_http_request_body(&mut socket)
+                            .await
+                            .expect("read operation wakeup request");
+                        request_counter.fetch_add(1, Ordering::SeqCst);
+                        let response_body = concat!(
+                            "data: {\"choices\":[{\"delta\":{\"content\":\"coalesced wakeup handled\"}}]}\n\n",
+                            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":8,\"completion_tokens\":4}}\n\n",
+                            "data: [DONE]\n\n"
+                        );
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n{}",
+                            response_body
+                        );
+                        socket
+                            .write_all(response.as_bytes())
+                            .await
+                            .expect("write operation wakeup response");
+                    });
+                }
+            }
+        });
+
+        let mut config = AgentConfig::default();
+        config.provider = PROVIDER_ID_OPENAI.to_string();
+        config.base_url = format!("http://{addr}/v1");
+        config.model = "gpt-5.4-mini".to_string();
+        config.api_key = "test-key".to_string();
+        config.auth_source = AuthSource::ApiKey;
+        config.api_transport = ApiTransport::ChatCompletions;
+        config.auto_retry = false;
+        config.max_retries = 0;
+        config.max_tool_loops = 1;
+        let engine = AgentEngine::new_test(manager, config, root.path()).await;
+        let thread_id = "thread-operation-wakeup-coalesce";
+        let now = now_millis();
+        {
+            let mut threads = engine.threads.write().await;
+            threads.insert(
+                thread_id.to_string(),
+                AgentThread {
+                    id: thread_id.to_string(),
+                    agent_name: None,
+                    title: "Operation wakeup coalesce".to_string(),
+                    messages: vec![AgentMessage::user("run both long commands", now)],
+                    pinned: false,
+                    upstream_thread_id: None,
+                    upstream_transport: None,
+                    upstream_provider: None,
+                    upstream_model: None,
+                    upstream_assistant_id: None,
+                    created_at: now,
+                    updated_at: now,
+                    total_input_tokens: 0,
+                    total_output_tokens: 0,
+                },
+            );
+        }
+
+        let first_operation = crate::server::operation_registry()
+            .accept_operation(zorai_protocol::tool_names::BASH_COMMAND, None);
+        let second_operation = crate::server::operation_registry()
+            .accept_operation(zorai_protocol::tool_names::BASH_COMMAND, None);
+        for operation in [&first_operation, &second_operation] {
+            crate::server::operation_registry().mark_started(&operation.operation_id);
+            engine
+                .register_operation_wakeup(
+                    thread_id,
+                    zorai_protocol::tool_names::BASH_COMMAND,
+                    &operation.operation_id,
+                )
+                .await;
+            crate::server::operation_registry().mark_completed_with_terminal_result(
+                &operation.operation_id,
+                serde_json::json!({
+                    "command": "sleep 1 && echo done",
+                    "exit_code": 0,
+                    "duration_ms": 1000,
+                    "stdout": "done",
+                }),
+            );
+        }
+        mark_operation_wakeup_debounce_elapsed(&engine, &first_operation.operation_id).await;
+        mark_operation_wakeup_debounce_elapsed(&engine, &second_operation.operation_id).await;
+
+        engine
+            .supervise_operation_completion_wakeups()
+            .await
+            .expect("operation wakeup supervision should succeed");
+
+        assert_eq!(
+            request_counter.load(Ordering::SeqCst),
+            1,
+            "same-thread operation wakeups in one supervisor pass should produce one visible continuation"
+        );
+
+        let threads = engine.threads.read().await;
+        let thread = threads
+            .get(thread_id)
+            .expect("thread should remain available");
+        let wakeup_messages = thread
+            .messages
+            .iter()
+            .filter(|message| {
+                message.role == MessageRole::System
+                    && message.content.contains("Background operations finished")
+                    && message.content.contains("\"state\":\"completed\"")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            wakeup_messages.len(),
+            1,
+            "same-thread wakeups should be gathered into one visible result payload"
+        );
+        let message = &wakeup_messages[0].content;
+        assert!(
+            message.contains("Background operations finished"),
+            "{message}"
+        );
+        assert!(message.contains("Operation results:"), "{message}");
+        assert!(message.contains(&first_operation.operation_id), "{message}");
+        assert!(
+            message.contains(&second_operation.operation_id),
+            "{message}"
+        );
+        let results_json = message
+            .split_once("Operation results:\n")
+            .map(|(_, json)| json)
+            .expect("batched wakeup message should include operation results JSON");
+        let results: serde_json::Value =
+            serde_json::from_str(results_json).expect("operation results should be JSON");
+        assert_eq!(
+            results.as_array().map(Vec::len),
+            Some(2),
+            "batched wakeup payload should include both operation results"
+        );
     }
 
     #[tokio::test]
@@ -616,6 +972,7 @@ mod tests {
                 "stdout": "done",
             }),
         );
+        mark_operation_wakeup_debounce_elapsed(&engine, &operation.operation_id).await;
 
         engine
             .supervise_operation_completion_wakeups()
