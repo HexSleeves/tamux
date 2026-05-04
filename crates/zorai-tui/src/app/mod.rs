@@ -84,6 +84,7 @@ pub struct TuiModel {
     system_monitor: Option<crate::system_monitor::SystemMonitorDisplay>,
     system_monitor_sampler: crate::system_monitor::SystemMonitorSampler,
     next_system_monitor_tick: u64,
+    image_preview_cache_revision: u64,
 
     // Agent activity state (from daemon events, not local buffers)
     agent_activity: Option<String>,

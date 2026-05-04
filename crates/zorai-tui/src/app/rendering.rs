@@ -16,6 +16,7 @@ pub(crate) struct ConversationAgentProfile {
 struct HeaderContextVm {
     profile: ConversationAgentProfile,
     usage: widgets::header::HeaderUsageDisplay,
+    session_duration_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,22 @@ enum ConversationAgentKind {
     Swarog,
     Rarog,
     Weles,
+}
+
+fn current_unix_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+fn session_duration_secs_from_created_at(created_at_ms: u64, now_ms: u64) -> Option<u64> {
+    if created_at_ms == 0 || created_at_ms > now_ms {
+        return None;
+    }
+
+    Some(now_ms.saturating_sub(created_at_ms) / 1000)
 }
 
 fn comma_list_contains(list: &str, needle: &str) -> bool {
@@ -936,9 +953,16 @@ impl TuiModel {
 
     fn current_header_context_vm(&self) -> HeaderContextVm {
         let profile = self.current_header_profile_for_active_pane();
-        let usage = self
-            .current_header_usage_summary_for_profile(&profile, self.current_header_usage_thread());
-        HeaderContextVm { profile, usage }
+        let thread = self.current_header_usage_thread();
+        let usage = self.current_header_usage_summary_for_profile(&profile, thread);
+        let session_duration_secs = thread.and_then(|thread| {
+            session_duration_secs_from_created_at(thread.created_at, current_unix_time_ms())
+        });
+        HeaderContextVm {
+            profile,
+            usage,
+            session_duration_secs,
+        }
     }
 
     #[cfg(test)]
@@ -1383,6 +1407,7 @@ impl TuiModel {
             &header.profile.model,
             header.profile.reasoning_effort.as_deref(),
             &header.usage,
+            header.session_duration_secs,
             &self.theme,
             self.approval.pending_approvals().len(),
             self.modal.top() == Some(modal::ModalKind::ApprovalCenter),

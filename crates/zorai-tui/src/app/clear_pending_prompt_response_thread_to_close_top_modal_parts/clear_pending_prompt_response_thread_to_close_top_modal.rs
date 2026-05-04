@@ -82,10 +82,12 @@ impl TuiModel {
         self.chat.is_streaming()
     }
 
-    fn clear_expired_queued_prompt_copy_feedback(&mut self) {
+    fn clear_expired_queued_prompt_copy_feedback(&mut self) -> bool {
+        let mut changed = false;
         for prompt in &mut self.queued_prompts {
-            prompt.clear_expired_copy_feedback(self.tick_counter);
+            changed |= prompt.clear_expired_copy_feedback(self.tick_counter);
         }
+        changed
     }
 
     fn sync_queued_prompt_modal_state(&mut self) {

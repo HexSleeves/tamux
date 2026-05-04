@@ -395,13 +395,15 @@ impl QueuedPrompt {
         self.copied_until_tick = Some(expires_at_tick);
     }
 
-    fn clear_expired_copy_feedback(&mut self, current_tick: u64) {
+    fn clear_expired_copy_feedback(&mut self, current_tick: u64) -> bool {
         if self
             .copied_until_tick
             .is_some_and(|expires_at| current_tick >= expires_at)
         {
             self.copied_until_tick = None;
+            return true;
         }
+        false
     }
 
     pub(crate) fn display_text(&self) -> String {
@@ -495,4 +497,3 @@ enum PendingWorkspaceActorPickerTarget {
     CreateForm,
     EditForm,
 }
-

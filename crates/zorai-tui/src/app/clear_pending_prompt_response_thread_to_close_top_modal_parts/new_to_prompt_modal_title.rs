@@ -5,6 +5,7 @@ impl TuiModel {
     ) -> Self {
         let mut system_monitor_sampler = crate::system_monitor::SystemMonitorSampler::new();
         let system_monitor = system_monitor_sampler.sample();
+        let ticks_per_second = (1_000 / TUI_TICK_RATE_MS).max(1);
 
         Self {
             chat: chat::ChatState::new(),
@@ -46,7 +47,8 @@ impl TuiModel {
             next_auto_refresh_tick: 0,
             system_monitor,
             system_monitor_sampler,
-            next_system_monitor_tick: 0,
+            next_system_monitor_tick: ticks_per_second * 3,
+            image_preview_cache_revision: widgets::image_preview::preview_cache_revision(),
             agent_activity: None,
             thread_agent_activity: std::collections::HashMap::new(),
             bootstrap_pending_activity_threads: std::collections::HashSet::new(),

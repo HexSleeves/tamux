@@ -139,6 +139,24 @@ fn copied_message_feedback_expires_after_deadline() {
 }
 
 #[test]
+fn copied_message_feedback_keeps_render_cache_epoch_stable_until_expiry() {
+    let mut state = state_with_messages(1);
+    state.mark_message_copied(0, 25);
+
+    let active_epoch = state.render_cache_epoch(10);
+
+    assert_eq!(
+        active_epoch,
+        state.render_cache_epoch(24),
+        "active copy feedback should not invalidate the chat render cache on every tick"
+    );
+
+    state.clear_expired_copy_feedback(25);
+
+    assert_eq!(state.render_cache_epoch(25), 0);
+}
+
+#[test]
 fn thread_list_received_replaces_threads() {
     let mut state = ChatState::new();
     let threads = vec![
@@ -492,4 +510,3 @@ fn thread_created_moves_new_thread_to_front() {
     assert_eq!(threads[2].id, "oldest");
     assert_eq!(state.active_thread_id(), Some("new"));
 }
-

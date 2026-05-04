@@ -1125,19 +1125,19 @@ impl ChatState {
     }
 
     pub fn render_cache_epoch(&self, current_tick: u64) -> u64 {
-        if self.copied_message_feedback.is_some() {
-            return current_tick;
-        }
-
+        let mut epoch = if self.copied_message_feedback.is_some() {
+            1_u64 << 63
+        } else {
+            0
+        };
         if self
             .retry_status()
             .is_some_and(|status| status.phase == RetryPhase::Waiting)
         {
             let ticks_per_second = (1_000 / crate::app::TUI_TICK_RATE_MS).max(1);
-            return current_tick / ticks_per_second;
+            epoch |= current_tick / ticks_per_second;
         }
-
-        0
+        epoch
     }
 
     pub fn has_running_tool_calls(&self) -> bool {
