@@ -20,10 +20,10 @@ thread_local! {
     static BUILD_RENDERED_LINES_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-include!("part1.rs");
-include!("part2.rs");
-include!("part3.rs");
-include!("part4.rs");
+include!("render_streaming_markdown_to_message_block_style_to_message_action.rs");
+include!("build_rendered_lines_to_build_visible_window_from_snapshot_to_apply.rs");
+include!("resolved_scroll_to_highlight_line_range_to_selected_text_to_selection.rs");
+include!("selection_point_from_snapshot_to_render.rs");
 
 #[cfg(test)]
 mod tests {
@@ -47,6 +47,6 @@ mod tests {
         chat
     }
 
-    include!("tests/tests_part1.rs");
-    include!("tests/tests_part2.rs");
+    include!("tests/chat_handles_empty_state_to_all_file_mutation_tool_rows_use_filename.rs");
+    include!("tests/compaction_artifact_lines_use_standard_message_left_padding_to_concierge.rs");
 }

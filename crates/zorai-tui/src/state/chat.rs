@@ -1175,6 +1175,17 @@ impl ChatState {
             || self.has_running_tool_calls()
     }
 
+    pub fn is_thread_streaming(&self, thread_id: &str) -> bool {
+        self.thread_activity.get(thread_id).is_some_and(|activity| {
+            !activity.streaming_content.is_empty()
+                || !activity.streaming_reasoning.is_empty()
+                || activity
+                    .active_tool_calls
+                    .iter()
+                    .any(|tc| tc.status == ToolCallStatus::Running)
+        })
+    }
+
     fn bump_render_revision(&mut self) {
         self.render_revision = self.render_revision.wrapping_add(1);
     }

@@ -161,6 +161,18 @@ fn raw_mode_guard_requests_only_disambiguate_enhancement_flag() {
 }
 
 #[test]
+fn selection_screen_enter_output_uses_alternate_screen() {
+    let mut output = Vec::new();
+
+    terminal_ui::write_selection_screen_enter(&mut output).expect("write enter sequence");
+
+    let output = String::from_utf8(output).expect("ansi output should be utf8");
+    assert!(output.contains("\x1b[?1049h"));
+    assert!(output.contains("\x1b[2J"));
+    assert!(output.contains("\x1b[1;1H"));
+}
+
+#[test]
 fn actionable_key_event_kind_accepts_press() {
     assert!(terminal_ui::is_actionable_key_event_kind(
         crossterm::event::KeyEventKind::Press
@@ -233,6 +245,17 @@ fn web_search_setup_maps_api_key_to_search_provider() {
         Some("tavily")
     );
     assert_eq!(web_search_provider_for_key(""), None);
+}
+
+#[test]
+fn web_search_setup_offers_duckduckgo_without_api_key() {
+    let items = web_search_choice_items();
+    assert!(items.contains(&("DuckDuckGo", "duckduckgo")));
+    assert_eq!(
+        web_search_provider_for_choice("duckduckgo"),
+        Some("duckduckgo")
+    );
+    assert_eq!(web_search_api_key_prompt_for_choice("duckduckgo"), None);
 }
 
 #[test]
@@ -347,6 +370,22 @@ fn wizard_ignores_async_command_capability_ack_messages() {
 }
 
 #[test]
+fn setup_probe_requires_configured_provider_and_model() {
+    assert_eq!(
+        setup_probe_from_config_json(r#"{"provider":"openai","model":""}"#),
+        SetupProbe::NeedsSetup
+    );
+    assert_eq!(
+        setup_probe_from_config_json(r#"{"provider":"","model":"gpt-5.4-mini"}"#),
+        SetupProbe::NeedsSetup
+    );
+    assert_eq!(
+        setup_probe_from_config_json(r#"{"provider":"openai","model":"gpt-5.4-mini"}"#),
+        SetupProbe::Ready
+    );
+}
+
+#[test]
 fn provider_validation_terminal_response_ignores_operation_acceptance() {
     let response = parse_provider_validation_terminal_response(DaemonMessage::OperationAccepted {
         operation_id: "op-provider-validation-1".to_string(),
@@ -414,9 +453,9 @@ fn config_set_response_completes_on_operation_acceptance() {
 }
 
 #[test]
-fn setup_probe_marks_ready_when_provider_is_persisted() {
+fn setup_probe_marks_ready_when_provider_and_model_are_persisted() {
     assert_eq!(
-        setup_probe_from_config_json(r#"{"provider":"openai"}"#),
+        setup_probe_from_config_json(r#"{"provider":"openai","model":"gpt-5.4-mini"}"#),
         SetupProbe::Ready
     );
 }

@@ -50,6 +50,11 @@ impl AgentEngine {
                 return None;
             }
             let thread = threads.get(&thread_id)?;
+            if terminal_work_owns_thread(thread.id.as_str(), &tasks, &goal_runs)
+                && !active_work_owns_thread(thread.id.as_str(), &tasks, &goal_runs)
+            {
+                return None;
+            }
             if thread_has_unanswered_tool_calls(thread) {
                 return None;
             }

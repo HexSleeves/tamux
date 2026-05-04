@@ -1,0 +1,2 @@
+include!("assistant_messages_prefer_message_author_name_parts/compaction_artifact_lines_use_standard_message_left_padding_to_concierge.rs");
+include!("assistant_messages_prefer_message_author_name_parts/assistant_messages_prefer_message_author_name_when_available.rs");

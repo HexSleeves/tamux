@@ -1,0 +1,492 @@
+fn is_svarog_agent_name(agent_name: &str) -> bool {
+    matches!(
+        agent_name.trim().to_ascii_lowercase().as_str(),
+        "svarog" | "swarog" | "main"
+    )
+}
+
+fn is_svarog_thread(thread: &AgentThread) -> bool {
+    thread
+        .agent_name
+        .as_deref()
+        .is_some_and(is_svarog_agent_name)
+}
+
+#[cfg(test)]
+pub(crate) fn thread_display_title(thread: &AgentThread) -> String {
+    thread_display_title_inner(thread, None, None)
+}
+
+#[cfg(test)]
+pub(crate) fn thread_display_title_for_tasks(thread: &AgentThread, tasks: &TaskState) -> String {
+    let goal_index = GoalThreadIndex::from_tasks(tasks);
+    thread_display_title_inner(thread, Some(&goal_index), None)
+}
+
+pub(crate) fn thread_display_title_for_workspace(
+    thread: &AgentThread,
+    tasks: &TaskState,
+    workspace: &WorkspaceState,
+) -> String {
+    let goal_index = GoalThreadIndex::from_tasks(tasks);
+    let workspace_index = WorkspaceThreadIndex::from_workspace(workspace, tasks);
+    thread_display_title_inner(thread, Some(&goal_index), Some(&workspace_index))
+}
+
+fn thread_display_title_inner(
+    thread: &AgentThread,
+    goal_index: Option<&GoalThreadIndex>,
+    workspace_index: Option<&WorkspaceThreadIndex>,
+) -> String {
+    if thread.id == "concierge" || thread.title.eq_ignore_ascii_case("concierge") {
+        AGENT_NAME_RAROG.to_string()
+    } else if is_workspace_thread_with_index(thread, workspace_index) {
+        let role = thread
+            .agent_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Workspace");
+        format!("workspace: {role} · {}", thread.title)
+    } else if is_goal_thread_with_index(thread, goal_index) {
+        let role = thread
+            .agent_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Goal");
+        format!("goal: {role} · {}", thread.title)
+    } else {
+        thread.title.clone()
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn filtered_threads<'a>(
+    chat: &'a ChatState,
+    modal: &ModalState,
+    subagents: &SubAgentsState,
+) -> Vec<&'a AgentThread> {
+    filtered_threads_inner(chat, modal, subagents, None, None)
+}
+
+#[cfg(test)]
+pub(crate) fn filtered_threads_for_tasks<'a>(
+    chat: &'a ChatState,
+    modal: &ModalState,
+    subagents: &SubAgentsState,
+    tasks: &TaskState,
+) -> Vec<&'a AgentThread> {
+    let goal_index = GoalThreadIndex::from_tasks(tasks);
+    filtered_threads_inner(chat, modal, subagents, Some(&goal_index), None)
+}
+
+pub(crate) fn filtered_threads_for_workspace<'a>(
+    chat: &'a ChatState,
+    modal: &ModalState,
+    subagents: &SubAgentsState,
+    tasks: &TaskState,
+    workspace: &WorkspaceState,
+) -> Vec<&'a AgentThread> {
+    let goal_index = GoalThreadIndex::from_tasks(tasks);
+    let workspace_index = WorkspaceThreadIndex::from_workspace(workspace, tasks);
+    filtered_threads_inner(
+        chat,
+        modal,
+        subagents,
+        Some(&goal_index),
+        Some(&workspace_index),
+    )
+}
+
+fn filtered_threads_inner<'a>(
+    chat: &'a ChatState,
+    modal: &ModalState,
+    subagents: &SubAgentsState,
+    goal_index: Option<&GoalThreadIndex>,
+    workspace_index: Option<&WorkspaceThreadIndex>,
+) -> Vec<&'a AgentThread> {
+    let query = modal.command_query();
+    chat.threads()
+        .iter()
+        .filter(|thread| !is_hidden_handoff_thread(thread))
+        .filter(|thread| match modal.thread_picker_tab() {
+            ThreadPickerTab::Swarog => {
+                !is_rarog_thread(thread)
+                    && !is_internal_thread(thread)
+                    && !is_gateway_thread(thread)
+                    && !is_weles_thread(thread)
+                    && !is_workspace_thread_with_index(thread, workspace_index)
+                    && !is_goal_thread_with_index(thread, goal_index)
+                    && !is_playground_thread(thread)
+                    && is_svarog_thread(thread)
+            }
+            ThreadPickerTab::Rarog => is_rarog_thread(thread),
+            ThreadPickerTab::Weles => !is_playground_thread(thread) && is_weles_thread(thread),
+            ThreadPickerTab::Goals => {
+                !is_workspace_thread_with_index(thread, workspace_index)
+                    && is_goal_thread_with_index(thread, goal_index)
+            }
+            ThreadPickerTab::Workspace => is_workspace_thread_with_index(thread, workspace_index),
+            ThreadPickerTab::Playgrounds => is_playground_thread(thread),
+            ThreadPickerTab::Internal => is_internal_thread(thread),
+            ThreadPickerTab::Gateway => is_gateway_thread(thread),
+            ThreadPickerTab::Agent(agent_id) => {
+                thread_matches_agent_tab(thread, &agent_id, subagents, goal_index, workspace_index)
+            }
+        })
+        .filter(|thread| thread_matches_query(thread, query, goal_index, workspace_index))
+        .collect()
+}
+
+#[cfg(test)]
+fn tab_cells(chat: &ChatState, subagents: &SubAgentsState) -> Vec<ThreadPickerTabCell> {
+    tab_cells_inner(chat, subagents, None, None)
+}
+
+fn tab_cells_inner(
+    chat: &ChatState,
+    subagents: &SubAgentsState,
+    goal_index: Option<&GoalThreadIndex>,
+    workspace_index: Option<&WorkspaceThreadIndex>,
+) -> Vec<ThreadPickerTabCell> {
+    let mut x = 0;
+    tab_specs_inner(chat, subagents, goal_index, workspace_index)
+        .into_iter()
+        .map(|spec| {
+            let tab = spec.tab;
+            let label = spec.label;
+            let cell = ThreadPickerTabCell {
+                tab,
+                label,
+                start: x,
+            };
+            x = x.saturating_add(cell.label.chars().count() as u16 + TAB_GAP);
+            cell
+        })
+        .collect()
+}
+
+fn tab_scroll_offset(
+    area_width: u16,
+    cells: &[ThreadPickerTabCell],
+    selected: &ThreadPickerTab,
+) -> u16 {
+    if area_width == 0 {
+        return 0;
+    }
+
+    let Some(selected_cell) = cells.iter().find(|cell| &cell.tab == selected) else {
+        return 0;
+    };
+    let total_width = cells
+        .last()
+        .map(|cell| cell.start.saturating_add(cell.label.chars().count() as u16))
+        .unwrap_or(0);
+    let max_offset = total_width.saturating_sub(area_width);
+    let selected_width = selected_cell.label.chars().count() as u16;
+    let desired_offset = if selected_width >= area_width {
+        selected_cell.start
+    } else {
+        selected_cell
+            .start
+            .saturating_add(selected_width)
+            .saturating_sub(area_width)
+    };
+
+    desired_offset.min(max_offset)
+}
+
+fn visible_tab_cells(
+    area: Rect,
+    cells: &[ThreadPickerTabCell],
+    scroll: u16,
+) -> Vec<(ThreadPickerTab, Rect, String)> {
+    let viewport_end = scroll.saturating_add(area.width);
+
+    cells
+        .iter()
+        .filter_map(|cell| {
+            let cell_width = cell.label.chars().count() as u16;
+            let cell_end = cell.start.saturating_add(cell_width);
+            let visible_start = cell.start.max(scroll);
+            let visible_end = cell_end.min(viewport_end);
+
+            if visible_start >= visible_end {
+                return None;
+            }
+
+            let skip = visible_start.saturating_sub(cell.start) as usize;
+            let width = visible_end.saturating_sub(visible_start);
+            let label = cell.label.chars().skip(skip).take(width as usize).collect();
+            let rect = Rect::new(
+                area.x.saturating_add(visible_start.saturating_sub(scroll)),
+                area.y,
+                width,
+                area.height,
+            );
+
+            Some((cell.tab.clone(), rect, label))
+        })
+        .collect()
+}
+
+pub(crate) fn visible_window(
+    cursor: usize,
+    item_count: usize,
+    list_height: usize,
+) -> (usize, usize) {
+    if item_count == 0 || list_height == 0 {
+        return (0, 0);
+    }
+
+    let height = list_height.min(item_count);
+    let max_start = item_count.saturating_sub(height);
+    let start = cursor
+        .saturating_sub(height.saturating_sub(1))
+        .min(max_start);
+    (start, height)
+}
+
+fn synthetic_row_label(tab: ThreadPickerTab) -> &'static str {
+    match tab {
+        ThreadPickerTab::Goals => "Goal threads are created automatically",
+        ThreadPickerTab::Workspace => "Workspace threads are created from workspace tasks",
+        ThreadPickerTab::Playgrounds => "Playgrounds are created automatically",
+        ThreadPickerTab::Gateway => "Gateway threads are created automatically",
+        ThreadPickerTab::Agent(_) => "+ New conversation",
+        _ => "+ New conversation",
+    }
+}
+
+pub fn render_for_workspace(
+    frame: &mut Frame,
+    area: Rect,
+    chat: &ChatState,
+    modal: &ModalState,
+    subagents: &SubAgentsState,
+    tasks: &TaskState,
+    workspace: &WorkspaceState,
+    theme: &ThemeTokens,
+) {
+    let block = Block::default()
+        .title(" THREADS ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Double)
+        .border_style(theme.accent_secondary);
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 5 {
+        return;
+    }
+
+    let [tabs_row, search_row, separator_row, list_row, hints_row] = thread_picker_layout(inner);
+    let goal_index = GoalThreadIndex::from_tasks(tasks);
+    let workspace_index = WorkspaceThreadIndex::from_workspace(workspace, tasks);
+
+    let tab_cells = tab_cells_inner(chat, subagents, Some(&goal_index), Some(&workspace_index));
+    let selected_tab = modal.thread_picker_tab();
+    let tab_scroll = tab_scroll_offset(tabs_row.width, &tab_cells, &selected_tab);
+    let tab_line = Line::from(
+        tab_cells
+            .iter()
+            .enumerate()
+            .flat_map(|(index, cell)| {
+                let style = if cell.tab == selected_tab {
+                    theme.accent_primary
+                } else {
+                    theme.fg_dim
+                };
+                let mut spans = vec![Span::styled(cell.label.clone(), style)];
+                if index + 1 < tab_cells.len() {
+                    spans.push(Span::raw(" "));
+                }
+                spans
+            })
+            .collect::<Vec<_>>(),
+    );
+    frame.render_widget(Paragraph::new(tab_line).scroll((0, tab_scroll)), tabs_row);
+
+    // Search input
+    let query = modal.command_query();
+    let input_line = Line::from(vec![
+        Span::raw(" "),
+        Span::styled(
+            if query.is_empty() {
+                "Search threads..."
+            } else {
+                query
+            },
+            theme.fg_active,
+        ),
+        if query.is_empty() {
+            Span::raw("")
+        } else {
+            Span::raw("\u{2588}")
+        },
+    ]);
+    frame.render_widget(Paragraph::new(input_line), search_row);
+
+    // Separator
+    let sep = Line::from(Span::styled(
+        "\u{2500}".repeat(separator_row.width as usize),
+        theme.fg_dim,
+    ));
+    frame.render_widget(Paragraph::new(sep), separator_row);
+
+    // Build thread list
+    let active_id = chat.active_thread_id();
+    let filtered_threads = filtered_threads_inner(
+        chat,
+        modal,
+        subagents,
+        Some(&goal_index),
+        Some(&workspace_index),
+    );
+    let status_index = ThreadPickerStatusIndex::from_state(chat, tasks);
+
+    let cursor = modal.picker_cursor();
+    let list_h = list_row.height as usize;
+    let inner_w = inner.width as usize;
+    let total_items = filtered_threads.len() + 1;
+    let (visible_start, visible_len) = visible_window(cursor, total_items, list_h);
+
+    let list_items: Vec<ListItem> = (0..list_h)
+        .map(|i| {
+            if i < visible_len {
+                let absolute_index = visible_start + i;
+                if absolute_index == 0 {
+                    let row_label = synthetic_row_label(modal.thread_picker_tab());
+                    let is_selected = cursor == 0;
+                    if is_selected {
+                        ListItem::new(Line::from(vec![Span::raw(format!("  {row_label}"))]))
+                            .style(Style::default().bg(Color::Indexed(178)).fg(Color::Black))
+                    } else {
+                        ListItem::new(Line::from(vec![
+                            Span::raw("  "),
+                            Span::styled(row_label, theme.fg_dim),
+                        ]))
+                    }
+                } else {
+                    let thread_idx = absolute_index - 1;
+                    if thread_idx < filtered_threads.len() {
+                        let thread = filtered_threads[thread_idx];
+                        let is_selected = cursor == absolute_index;
+                        let is_active = active_id == Some(thread.id.as_str());
+
+                        let dot_style = if is_active {
+                            theme.accent_success
+                        } else {
+                            theme.fg_dim
+                        };
+                        let status = status_index.status_for(thread);
+                        let status_style = match status {
+                            ThreadPickerStatus::Running => theme.accent_success,
+                            ThreadPickerStatus::Paused => theme.accent_secondary,
+                            ThreadPickerStatus::Stopped => theme.accent_danger,
+                            ThreadPickerStatus::Idle => theme.fg_dim,
+                        };
+                        let status_label = format!("[{}]", status.label());
+
+                        let time_str = format_time_ago(thread.updated_at);
+                        let tokens = thread.total_input_tokens + thread.total_output_tokens;
+                        let token_str = format_tokens(tokens);
+
+                        let display_title = thread_display_title_inner(
+                            thread,
+                            Some(&goal_index),
+                            Some(&workspace_index),
+                        );
+                        let max_title = inner_w
+                            .saturating_sub(28)
+                            .saturating_sub(status_label.chars().count());
+                        let title = if display_title.chars().count() > max_title && max_title > 3 {
+                            format!(
+                                "{}...",
+                                display_title
+                                    .chars()
+                                    .take(max_title - 3)
+                                    .collect::<String>()
+                            )
+                        } else {
+                            display_title
+                        };
+
+                        if is_selected {
+                            ListItem::new(Line::from(vec![
+                                Span::styled("\u{25cf}", dot_style),
+                                Span::raw(" "),
+                                Span::raw(status_label.clone()),
+                                Span::raw(" "),
+                                Span::raw(title),
+                                Span::raw("  "),
+                                Span::raw(time_str),
+                                Span::raw("  "),
+                                Span::raw(token_str),
+                            ]))
+                            .style(Style::default().bg(Color::Indexed(178)).fg(Color::Black))
+                        } else {
+                            ListItem::new(Line::from(vec![
+                                Span::raw("  "),
+                                Span::styled("\u{25cf}", dot_style),
+                                Span::raw(" "),
+                                Span::styled(status_label, status_style),
+                                Span::raw(" "),
+                                Span::styled(title, theme.fg_active),
+                                Span::raw("  "),
+                                Span::styled(time_str, theme.fg_dim),
+                                Span::raw("  "),
+                                Span::styled(token_str, theme.fg_dim),
+                            ]))
+                        }
+                    } else {
+                        ListItem::new(Line::raw(""))
+                    }
+                }
+            } else {
+                ListItem::new(Line::raw(""))
+            }
+        })
+        .collect();
+
+    let list = List::new(list_items);
+    frame.render_widget(list, list_row);
+
+    // Hints
+    let mut hints = vec![
+        Span::raw(" "),
+        Span::styled("↑↓", theme.fg_active),
+        Span::styled(" navigate  ", theme.fg_dim),
+        Span::styled("←→", theme.fg_active),
+        Span::styled(" source  ", theme.fg_dim),
+        Span::styled("Enter", theme.fg_active),
+        Span::styled(" select  ", theme.fg_dim),
+    ];
+    if cursor > 0 {
+        hints.push(Span::styled("Del", theme.fg_active));
+        hints.push(Span::styled(" delete  ", theme.fg_dim));
+        hints.push(Span::styled("Ctrl+S", theme.fg_active));
+        hints.push(Span::styled(" stop/resume  ", theme.fg_dim));
+    }
+    hints.push(Span::styled("Shift+R", theme.fg_active));
+    hints.push(Span::styled(" refresh  ", theme.fg_dim));
+    hints.push(Span::styled("Esc", theme.fg_active));
+    hints.push(Span::styled(" close", theme.fg_dim));
+    let hints = Line::from(hints);
+    frame.render_widget(Paragraph::new(hints), hints_row);
+}
+
+#[cfg(test)]
+pub fn hit_test(
+    area: Rect,
+    chat: &ChatState,
+    modal: &ModalState,
+    subagents: &SubAgentsState,
+    mouse: Position,
+) -> Option<ThreadPickerHitTarget> {
+    let tasks = TaskState::default();
+    let workspace = WorkspaceState::new();
+    hit_test_for_workspace(area, chat, modal, subagents, &tasks, &workspace, mouse)
+}

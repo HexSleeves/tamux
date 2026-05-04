@@ -433,6 +433,10 @@ impl HistoryStore {
                     "UPDATE agent_threads SET deleted_at = ?2 WHERE id = ?1 AND deleted_at IS NULL",
                     params![id, deleted_at],
                 )?;
+                conn.execute(
+                    "UPDATE agent_messages SET deleted_at = ?2 WHERE thread_id = ?1 AND deleted_at IS NULL",
+                    params![id, deleted_at],
+                )?;
                 Ok(())
             })
             .await

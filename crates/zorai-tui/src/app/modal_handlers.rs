@@ -374,6 +374,7 @@ impl TuiModel {
                             }
                             "whatsapp_token" => self.config.whatsapp_token = value,
                             "whatsapp_phone_id" => self.config.whatsapp_phone_id = value,
+                            "duckduckgo_region" => self.config.duckduckgo_region = value,
                             "firecrawl_api_key" => self.config.firecrawl_api_key = value,
                             "exa_api_key" => self.config.exa_api_key = value,
                             "tavily_api_key" => self.config.tavily_api_key = value,
@@ -976,7 +977,9 @@ impl TuiModel {
                     return false;
                 }
                 KeyCode::Enter => {
-                    if self.settings_field_click_uses_toggle() {
+                    if self.current_settings_field_name() == "enable_honcho_memory" {
+                        self.activate_settings_field();
+                    } else if self.settings_field_click_uses_toggle() {
                         self.toggle_settings_field();
                     } else {
                         self.activate_settings_field();

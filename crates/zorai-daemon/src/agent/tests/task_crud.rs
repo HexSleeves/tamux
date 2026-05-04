@@ -838,6 +838,77 @@ async fn stopping_goal_run_records_operator_stop_resume_decision() {
 }
 
 #[tokio::test]
+async fn stopping_goal_run_cancels_all_related_goal_tasks_and_streams() {
+    let root = tempdir().expect("temp dir");
+    let manager = SessionManager::new_test(root.path()).await;
+    let engine = AgentEngine::new_test(manager, AgentConfig::default(), root.path()).await;
+    let goal_run_id = "goal-stop-all-related";
+    let active_task_id = "task-goal-active";
+    let child_task_id = "task-goal-child";
+    let approval_id = "autonomy-ack-stop-all";
+    let active_thread_id = "thread-goal-active";
+    let child_thread_id = "thread-goal-child";
+
+    let mut goal_run = sample_supervised_goal_run(goal_run_id, active_task_id, approval_id);
+    goal_run.status = GoalRunStatus::Running;
+    goal_run.awaiting_approval_id = None;
+    goal_run.active_thread_id = Some(active_thread_id.to_string());
+    goal_run.execution_thread_ids = vec![active_thread_id.to_string(), child_thread_id.to_string()];
+    goal_run.child_task_ids.push(child_task_id.to_string());
+    engine.goal_runs.lock().await.push_back(goal_run);
+
+    sample_awaiting_task(&engine, goal_run_id, active_task_id, approval_id).await;
+    {
+        let mut tasks = engine.tasks.lock().await;
+        let active = tasks
+            .iter_mut()
+            .find(|task| task.id == active_task_id)
+            .expect("active task should exist");
+        active.status = TaskStatus::InProgress;
+        active.awaiting_approval_id = None;
+        active.blocked_reason = None;
+        active.thread_id = Some(active_thread_id.to_string());
+
+        let mut child = active.clone();
+        child.id = child_task_id.to_string();
+        child.title = "spawned goal child".to_string();
+        child.thread_id = Some(child_thread_id.to_string());
+        child.parent_task_id = Some(active_task_id.to_string());
+        child.parent_thread_id = Some(active_thread_id.to_string());
+        child.status = TaskStatus::InProgress;
+        tasks.push_back(child);
+    }
+
+    let (_active_generation, active_token, _active_retry) =
+        engine.begin_stream_cancellation(active_thread_id).await;
+    let (_child_generation, child_token, _child_retry) =
+        engine.begin_stream_cancellation(child_thread_id).await;
+
+    let changed = engine.control_goal_run(goal_run_id, "stop", None).await;
+    assert!(changed, "stop should update goal state");
+
+    let tasks = engine.tasks.lock().await;
+    let active = tasks
+        .iter()
+        .find(|task| task.id == active_task_id)
+        .expect("active task should remain recorded");
+    let child = tasks
+        .iter()
+        .find(|task| task.id == child_task_id)
+        .expect("child task should remain recorded");
+    assert_eq!(active.status, TaskStatus::Cancelled);
+    assert_eq!(child.status, TaskStatus::Cancelled);
+    assert!(
+        active_token.is_cancelled(),
+        "active stream should be cancelled"
+    );
+    assert!(
+        child_token.is_cancelled(),
+        "child stream should be cancelled"
+    );
+}
+
+#[tokio::test]
 async fn get_goal_run_capped_for_ipc_truncates_oversized_detail_payload() {
     let root = tempdir().expect("temp dir");
     let manager = SessionManager::new_test(root.path()).await;
