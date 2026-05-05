@@ -5,7 +5,7 @@ tags: [financial-data, economic-data, fred, world-bank, time-series, python, zor
 ---
 ## Overview
 
-pandas-datareader provides a unified interface for reading economic and financial time series from multiple sources: FRED (Federal Reserve), World Bank, OECD, Eurostat, Yahoo Finance, and St. Louis Fed. Standard data ingestion for macroeconomic research and quantitative analysis.
+pandas-datareader provides a unified interface for reading economic and financial time series from multiple sources: FRED (Federal Reserve), World Bank, OECD, Eurostat, Yahoo Finance, and St. Louis Fed. Standard tool for macroeconomic data ingestion.
 
 ## Installation
 
@@ -13,7 +13,7 @@ pandas-datareader provides a unified interface for reading economic and financia
 uv pip install pandas-datareader
 ```
 
-## FRED (Federal Reserve Economic Data)
+## FRED Data
 
 ```python
 import pandas_datareader.data as web
@@ -21,9 +21,14 @@ import datetime
 
 start = datetime.datetime(2020, 1, 1)
 gdp = web.DataReader("GDP", "fred", start)
+unemp = web.DataReader("UNRATE", "fred", start)
 cpi = web.DataReader("CPIAUCSL", "fred", start)
 fedfunds = web.DataReader("FEDFUNDS", "fred", start)
-unemp = web.DataReader("UNRATE", "fred", start)
+ten_year = web.DataReader("DGS10", "fred", start)
+
+import pandas as pd
+combined = pd.DataFrame({"GDP": gdp["GDP"], "CPI": cpi["CPIAUCSL"], "FedFunds": fedfunds["FEDFUNDS"]})
+print(combined.tail())
 ```
 
 ## World Bank

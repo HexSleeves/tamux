@@ -5,7 +5,7 @@ tags: [bayesian, pymc, stochastic-volatility, portfolio-optimization, risk, mark
 ---
 ## Overview
 
-PyMC provides Bayesian inference for financial modeling using probabilistic programming. Implements stochastic volatility models, regime-switching, Bayesian portfolio optimization, factor models, and MCMC risk estimation with the NUTS sampler.
+PyMC provides Bayesian inference for financial modeling: stochastic volatility, regime-switching, Bayesian portfolio optimization, factor models, and MCMC risk estimation using the NUTS sampler. ArviZ provides diagnostics and visualization.
 
 ## Installation
 
@@ -13,21 +13,23 @@ PyMC provides Bayesian inference for financial modeling using probabilistic prog
 uv pip install pymc arviz
 ```
 
-## Stochastic Volatility
+## Stochastic Volatility Model
 
 ```python
 import pymc as pm
 import numpy as np
 import arviz as az
 
+# Simulated daily returns
 returns = np.random.randn(500) * 0.02
 
-with pm.Model() as sv:
+with pm.Model() as sv_model:
     sigma = pm.InverseGamma("sigma", alpha=2, beta=1)
     log_vol = pm.GaussianRandomWalk("log_vol", sigma=sigma, shape=len(returns))
-    obs = pm.Normal("obs", mu=0, sigma=pm.math.exp(log_vol / 2), observed=returns)
-    trace = pm.sample(1000, tune=1000)
+    obs = pm.Normal("returns", mu=0, sigma=pm.math.exp(log_vol / 2), observed=returns)
+    trace = pm.sample(1000, tune=1000, chains=4)
 
+print(az.summary(trace, var_names=["sigma"]))
 az.plot_trace(trace)
 ```
 

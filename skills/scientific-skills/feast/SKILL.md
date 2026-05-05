@@ -5,7 +5,7 @@ tags: [feast, feature-store, mlops, feature-engineering, online-serving, infrast
 ---
 ## Overview
 
-Feast is an open-source feature store for production ML. Serves features for training (offline via batch queries) and inference (online via low-latency API) with point-in-time correctness, feature validation, streaming ingestion, and a registry for governance.
+Feast is an open-source feature store for production ML, providing offline (batch training data via SQL queries) and online (low-latency serving via Redis, Firestore, or DynamoDB) feature retrieval with point-in-time correctness. Features are versioned, validated, and governed through a registry.
 
 ## Installation
 
@@ -13,15 +13,15 @@ Feast is an open-source feature store for production ML. Serves features for tra
 uv pip install feast
 ```
 
-## Define Features
+## Feature Definition
 
 ```python
 from feast import Entity, FeatureView, FileSource, ValueType
 from datetime import timedelta
 
-driver = Entity(name="driver_id", value_type=ValueType.INT64)
+driver = Entity(name="driver_id", value_type=ValueType.INT64, description="Driver identifier")
 source = FileSource(path="data/driver_stats.parquet", timestamp_field="event_timestamp")
-fv = FeatureView(
+feature_view = FeatureView(
     name="driver_hourly_stats",
     entities=[driver],
     ttl=timedelta(hours=2),
@@ -32,8 +32,8 @@ fv = FeatureView(
 ## Serve
 
 ```bash
-feast apply
-feast serve  # online serving at localhost:6566
+feast apply   # register in registry
+feast serve   # online serving at localhost:6566
 ```
 
 ## References

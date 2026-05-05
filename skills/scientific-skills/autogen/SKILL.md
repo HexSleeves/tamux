@@ -5,7 +5,7 @@ tags: [autogen, multi-agent, conversation, microsoft, llm, agent-framework, zora
 ---
 ## Overview
 
-AutoGen (Microsoft) enables multi-agent conversations where LLM agents collaborate on complex tasks. Supports code generation and execution, tool use, group chat, and human-in-the-loop. Well-suited for multi-step reasoning and coding tasks.
+AutoGen (Microsoft) enables multi-agent conversations where specialized LLM agents collaborate, write and execute code, use tools, and solve problems together. Supports group chat, human-in-the-loop, and flexible agent topologies.
 
 ## Installation
 
@@ -13,7 +13,7 @@ AutoGen (Microsoft) enables multi-agent conversations where LLM agents collabora
 uv pip install pyautogen
 ```
 
-## Two-Agent Chat
+## Two-Agent Coding
 
 ```python
 import autogen
@@ -33,8 +33,17 @@ user = autogen.UserProxyAgent(
 
 user.initiate_chat(
     assistant,
-    message="Write a Python script to download stock prices and plot a moving average crossover.",
+    message="Write a Python function to calculate Fibonacci numbers.",
 )
+```
+
+## Group Chat
+
+```python
+from autogen import GroupChat, GroupChatManager
+
+groupchat = GroupChat(agents=[engineer, critic, executor], messages=[], max_round=10)
+manager = GroupChatManager(groupchat=groupchat, llm_config=llm_config)
 ```
 
 ## References

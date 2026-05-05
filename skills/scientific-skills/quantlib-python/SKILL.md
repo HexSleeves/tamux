@@ -5,7 +5,7 @@ tags: [quantitative-finance, derivatives, options, fixed-income, risk-management
 ---
 ## Overview
 
-QuantLib Python provides pricing and risk analytics for fixed income, equity, FX, and credit derivatives. It is the standard open-source quant finance library, covering yield curves, options, swaps, bonds, caps/floors, swaptions, and structured products.
+QuantLib Python provides pricing and risk analytics for fixed income, equity, FX, and credit derivatives. Covers yield curves, options, swaps, bonds, caps/floors, swaptions, and structured products. The standard open-source quantitative finance library used by banks, hedge funds, and fintech.
 
 ## Installation
 
@@ -25,12 +25,11 @@ schedule = ql.Schedule(
     ql.UnitedStates(ql.UnitedStates.GovernmentBond),
     ql.Unadjusted, ql.Unadjusted,
     ql.DateGeneration.Backward, False)
-
-bond = ql.FixedRateBond(2, 100.0, schedule, [0.05], ql.ActualActual(ql.ActualActual.ISMA))
+bond = ql.FixedRateBond(2, 100.0, schedule, [0.05], ql.ActualActual())
 ytm = bond.bondYield(95.0, ql.ActualActual(), ql.Compounded, ql.Semiannual)
 print(f"YTM: {ytm:.4%}")
 ```
 
 ## References
 - [QuantLib docs](https://www.quantlib.org/)
-- [QuantLib-Python docs](https://quantlib-python-docs.readthedocs.io/)
+- [QuantLib-Python](https://quantlib-python-docs.readthedocs.io/)
