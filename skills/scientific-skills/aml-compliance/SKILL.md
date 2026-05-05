@@ -5,17 +5,32 @@ tags: [aml, kyc, compliance, anti-money-laundering, sanctions, regulatory, zorai
 ---
 ## Overview
 
-Anti-Money Laundering (AML) and Know Your Customer (KYC) compliance: sanctions screening, PEP detection, transaction monitoring, and suspicious activity reporting (SAR).
+AML/KYC compliance covers sanctions screening, PEP detection, transaction monitoring, currency transaction reports (CTR), suspicious activity reports (SAR), and OFAC compliance. Essential for fintech, banking, and payment applications handling regulated financial transactions.
 
-## Transaction Monitoring
+## Installation
+
+```bash
+uv pip install requests  # for sanctions API integration
+```
+
+## Screening Rules
 
 ```python
-def screen_transaction(tx):
+THRESHOLDS = {"ctr": 10000, "structuring_lookback": 5000}
+HIGH_RISK_COUNTRIES = {"IR", "KP", "SY", "CU", "MM"}
+
+def screen_tx(tx):
     alerts = []
-    if tx.amount > 10000:
-        alerts.append("Currency Transaction Report required")
-    if tx.amount > 5000 and tx.is_cash:
-        alerts.append("Structuring review: cash transaction over $5k")
-    if tx.origin_country in HIGH_RISK_JURISDICTIONS:
-        alerts.append("High-risk jurisdiction -- enhanced due diligence")
+    if tx.amount >= THRESHOLDS["ctr"]:
+        alerts.append("CTR required — cash transaction over $10k")
+    if tx.country in HIGH_RISK_COUNTRIES:
+        alerts.append("OFAC sanctioned jurisdiction — enhanced due diligence")
+    if tx.is_pep:
+        alerts.append("PEP flagged — enhanced monitoring")
     return alerts
+```
+
+## References
+- [FinCEN BSA](https://www.fincen.gov/)
+- [OFAC SDN search](https://sanctionssearch.ofac.treas.gov/)
+- [FATF recommendations](https://www.fatf-gafi.org/)

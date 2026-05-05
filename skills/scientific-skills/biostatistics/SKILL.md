@@ -5,7 +5,7 @@ tags: [biostatistics, hypothesis-testing, clinical-trials, statistics, sample-si
 ---
 ## Overview
 
-Medical biostatistics hypothesis testing: t-tests, ANOVA, chi-square, Fisher exact, Mann-Whitney, Kruskal-Wallis, sample size calculation, power analysis, multiple testing correction, and clinical trial biostatistics.
+Medical biostatistics for hypothesis testing, clinical trial design, and survival analysis. Covers t-tests, ANOVA, chi-square, Fisher exact, Mann-Whitney, Kruskal-Wallis, sample size calculation, power analysis, and multiple testing correction.
 
 ## Installation
 
@@ -20,13 +20,23 @@ import numpy as np
 from scipy import stats
 
 # Two-sample t-test
-group_a = np.random.normal(100, 15, 50)
-group_b = np.random.normal(110, 15, 50)
-t_stat, p_val = stats.ttest_ind(group_a, group_b)
+t_stat, p = stats.ttest_ind(np.random.normal(100, 15, 30), np.random.normal(110, 15, 30))
 
-# Mann-Whitney U (non-parametric)
-u_stat, p_val = stats.mannwhitneyu(group_a, group_b)
+# Mann-Whitney
+u_stat, p = stats.mannwhitneyu(np.random.normal(100, 15, 30), np.random.normal(110, 15, 30))
 
 # Chi-square
-observed = np.array([[30, 10], [20, 40]])
-chi2, p_val, dof, expected = stats.chi2_contingency(observed)
+chi2, p, dof, _ = stats.chi2_contingency(np.array([[30, 10], [20, 40]]))
+```
+
+## Sample Size
+
+```python
+from statsmodels.stats.power import TTestIndPower
+n = TTestIndPower().solve_power(effect_size=0.5, power=0.80, alpha=0.05)
+print(f"N per group: {np.ceil(n):.0f}")
+```
+
+## References
+- [SciPy stats](https://docs.scipy.org/doc/scipy/reference/stats.html)
+- [statsmodels](https://www.statsmodels.org/)

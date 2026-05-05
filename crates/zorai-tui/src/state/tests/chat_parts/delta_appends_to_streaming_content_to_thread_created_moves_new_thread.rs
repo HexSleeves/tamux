@@ -230,6 +230,30 @@ fn thread_history_stack_allows_opening_unloaded_spawned_thread() {
 }
 
 #[test]
+fn spawned_thread_navigation_bumps_render_revision() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadListReceived(vec![
+        make_thread("thread-a", "A"),
+        make_thread("thread-b", "B"),
+    ]));
+    state.reduce(ChatAction::SelectThread("thread-a".into()));
+    let before_open = state.render_revision();
+
+    assert!(state.open_spawned_thread("thread-a", "thread-b"));
+    assert!(
+        state.render_revision() > before_open,
+        "opening a spawned thread changes the rendered transcript"
+    );
+
+    let before_back = state.render_revision();
+    assert_eq!(state.go_back_thread(), Some("thread-a".to_string()));
+    assert!(
+        state.render_revision() > before_back,
+        "returning to the previous thread changes the rendered transcript"
+    );
+}
+
+#[test]
 fn thread_history_stack_survives_ordinary_selection_and_prunes_deleted_threads() {
     let mut state = ChatState::new();
     state.reduce(ChatAction::ThreadListReceived(vec![
@@ -307,6 +331,76 @@ fn thread_list_received_preserves_existing_messages_when_summary_is_empty() {
     assert_eq!(thread.title, "First renamed");
     assert_eq!(thread.messages.len(), 1);
     assert_eq!(thread.messages[0].content, "Existing detail");
+}
+
+#[test]
+fn thread_list_received_preserves_existing_profile_metadata_when_summary_is_empty() {
+    let mut state = ChatState::new();
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "First".into(),
+        agent_name: Some("Svarog".into()),
+        profile_provider: Some(PROVIDER_ID_GITHUB_COPILOT.into()),
+        profile_model: Some("gpt-5.4".into()),
+        profile_reasoning_effort: Some("xhigh".into()),
+        profile_context_window_tokens: Some(400_000),
+        messages: vec![AgentMessage {
+            role: MessageRole::Assistant,
+            content: "Existing detail".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }));
+
+    state.reduce(ChatAction::ThreadListReceived(vec![AgentThread {
+        id: "t1".into(),
+        title: "First renamed".into(),
+        messages: Vec::new(),
+        ..Default::default()
+    }]));
+
+    let thread = state.threads().first().expect("thread should exist");
+    assert_eq!(thread.agent_name.as_deref(), Some("Svarog"));
+    assert_eq!(
+        thread.profile_provider.as_deref(),
+        Some(PROVIDER_ID_GITHUB_COPILOT)
+    );
+    assert_eq!(thread.profile_model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(thread.profile_reasoning_effort.as_deref(), Some("xhigh"));
+    assert_eq!(thread.profile_context_window_tokens, Some(400_000));
+}
+
+#[test]
+fn duplicate_thread_created_preserves_loaded_history_window() {
+    let mut state = ChatState::new();
+    let messages = (20..120)
+        .map(|index| AgentMessage {
+            role: MessageRole::Assistant,
+            content: format!("message {index}"),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>();
+    state.reduce(ChatAction::ThreadDetailReceived(AgentThread {
+        id: "t1".into(),
+        title: "Existing".into(),
+        messages,
+        total_message_count: 120,
+        loaded_message_start: 20,
+        loaded_message_end: 120,
+        ..Default::default()
+    }));
+    state.reduce(ChatAction::SelectThread("t1".into()));
+
+    state.reduce(ChatAction::ThreadCreated {
+        thread_id: "t1".into(),
+        title: "Existing".into(),
+    });
+
+    let thread = state.active_thread().expect("thread should still exist");
+    assert_eq!(thread.total_message_count, 120);
+    assert_eq!(thread.loaded_message_start, 20);
+    assert_eq!(thread.loaded_message_end, 120);
+    assert_eq!(thread.messages.first().map(|message| message.content.as_str()), Some("message 20"));
 }
 
 #[test]

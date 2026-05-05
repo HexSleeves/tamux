@@ -5,7 +5,7 @@ tags: [backtesting, trading, strategy, backtest, quant-finance, python, zorai]
 ---
 ## Overview
 
-Backtrader is a Python backtesting framework for trading strategies. Supports data feeds, brokers, analyzers, and live trading with commission models and slippage.
+Backtrader is a Python backtesting framework for trading strategies. Supports multiple data feeds, live trading, commission/slippage models, custom analyzers, and visualization. Well-suited for equity, futures, and crypto strategy development.
 
 ## Installation
 
@@ -13,7 +13,7 @@ Backtrader is a Python backtesting framework for trading strategies. Supports da
 uv pip install backtrader
 ```
 
-## Moving Average Crossover Strategy
+## SMA Crossover
 
 ```python
 import backtrader as bt
@@ -33,8 +33,14 @@ class SmaCross(bt.Strategy):
             self.sell()
 
 cerebro = bt.Cerebro()
-data = bt.feeds.YahooFinanceData(dataname="AAPL", fromdate="2022-01-01", todate="2024-01-01")
+data = bt.feeds.YahooFinanceData(dataname="AAPL", fromdate="2022-01-01", todate="2023-01-01")
 cerebro.adddata(data)
 cerebro.addstrategy(SmaCross)
 cerebro.broker.setcash(10000.0)
-print(f"Final: ${cerebro.run()[0]:.2f}")
+print(f"Final value: ${cerebro.run()[0]:.2f}")
+cerebro.plot()
+```
+
+## References
+- [Backtrader docs](https://www.backtrader.com/docu/)
+- [Backtrader GitHub](https://github.com/mementum/backtrader)

@@ -5,7 +5,7 @@ tags: [crypto, trading-bot, backtesting, automation, strategy, ccxt, zorai]
 ---
 ## Overview
 
-Freqtrade is an open-source crypto trading bot with strategy development in Python, backtesting, hyperparameter optimization, and live trading via CCXT.
+Freqtrade is an open-source crypto trading bot written in Python. Supports strategy development, backtesting, hyperparameter optimization, and dry-run or live trading via 100+ exchange backends (CCXT).
 
 ## Installation
 
@@ -15,7 +15,7 @@ cd freqtrade
 uv pip install -e .
 ```
 
-## Basic Strategy
+## Strategy
 
 ```python
 from freqtrade.strategy import IStrategy
@@ -32,3 +32,15 @@ class MyStrategy(IStrategy):
     def populate_buy_trend(self, dataframe, metadata):
         dataframe.loc[(dataframe["rsi"] < 30) & (dataframe["volume"] > 0), "buy"] = 1
         return dataframe
+```
+
+## Run
+
+```bash
+freqtrade backtesting --strategy MyStrategy --timerange 20240101-20241231
+freqtrade trade --strategy MyStrategy --dry-run
+```
+
+## References
+- [Freqtrade docs](https://www.freqtrade.io/)
+- [Freqtrade GitHub](https://github.com/freqtrade/freqtrade)

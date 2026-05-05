@@ -5,9 +5,9 @@ tags: [vector-database, hybrid-search, rag-retrieval, embedding-indexes, weaviat
 ---
 ## Overview
 
-Weaviate is an open-source vector database with hybrid search (vector + keyword), generative search, and multi-modal support.
+Weaviate is an open-source vector database with built-in vectorization modules (OpenAI, Cohere, HuggingFace, Transformers, CLIP, multi-modal). Supports hybrid search (vector + BM25 keyword), generative search (RAG with LLM integration), and multi-modal data.
 
-## Quick Start
+## Installation
 
 ```bash
 docker run -p 8080:8080 semitechnologies/weaviate:latest
@@ -20,8 +20,21 @@ import weaviate
 import weaviate.classes as wvc
 
 client = weaviate.connect_to_local()
-collection = client.collections.create(name="Documents",
-    vectorizer_config=wvc.config.Configure.Vectorizer.text2vec_transformers())
-collection.data.insert({"title": "Paris", "content": "Paris is the capital of France."})
+collection = client.collections.create(
+    name="Documents",
+    vectorizer_config=wvc.config.Configure.Vectorizer.text2vec_transformers(),
+)
+collection.data.insert({
+    "title": "Paris",
+    "content": "Paris is the capital of France. It is known for the Eiffel Tower.",
+})
+
+# Hybrid search (vector + keyword)
 response = collection.query.hybrid(query="French capital", limit=5)
+for obj in response.objects:
+    print(obj.properties)
 ```
+
+## References
+- [Weaviate docs](https://weaviate.io/developers/weaviate)
+- [Weaviate GitHub](https://github.com/weaviate/weaviate)

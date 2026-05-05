@@ -5,7 +5,7 @@ tags: [backtesting, quant-finance, event-driven, factor-models, pipeline, tradin
 ---
 ## Overview
 
-Zipline Reloaded is an event-driven backtesting engine with minute/daily data, custom factors, pipeline API, and built-in risk/performance analytics.
+Zipline Reloaded is an event-driven backtesting engine (forked from Quantopian). Supports minute and daily data, custom factors, pipeline API, and built-in risk/performance analytics.
 
 ## Installation
 
@@ -13,24 +13,25 @@ Zipline Reloaded is an event-driven backtesting engine with minute/daily data, c
 uv pip install zipline-reloaded
 ```
 
-## Strategy Example
+## Strategy
 
 ```python
-from zipline.api import order_target, record, symbol
+from zipline.api import order_target, symbol
 from zipline import run_algorithm
 
 def initialize(context):
     context.asset = symbol("AAPL")
-    context.has_position = False
 
 def handle_data(context, data):
     price = data.current(context.asset, "price")
-    sma_20 = data.history(context.asset, "price", 20, "1d").mean()
-    sma_50 = data.history(context.asset, "price", 50, "1d").mean()
+    sma20 = data.history(context.asset, "price", 20, "1d").mean()
+    sma50 = data.history(context.asset, "price", 50, "1d").mean()
+    order_target(context.asset, 100 if sma20 > sma50 else 0)
 
-    if sma_20 > sma_50 and not context.has_position:
-        order_target(context.asset, 100)
-        context.has_position = True
-    elif sma_20 < sma_50 and context.has_position:
-        order_target(context.asset, 0)
-        context.has_position = False
+results = run_algorithm(start=pd.Timestamp("2022-01-01"), end=pd.Timestamp("2023-01-01"),
+                        initialize=initialize, handle_data=handle_data, capital_base=10000)
+```
+
+## References
+- [Zipline docs](https://zipline.ml4trading.io/)
+- [Zipline Reloaded GitHub](https://github.com/stefan-jansen/zipline-reloaded)

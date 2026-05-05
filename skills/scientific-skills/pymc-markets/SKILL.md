@@ -5,7 +5,7 @@ tags: [bayesian, pymc, stochastic-volatility, portfolio-optimization, risk, mark
 ---
 ## Overview
 
-Bayesian inference for financial markets using PyMC: stochastic volatility models, regime-switching, Bayesian portfolio optimization, and factor models.
+PyMC provides Bayesian inference for financial modeling using probabilistic programming. Implements stochastic volatility models, regime-switching, Bayesian portfolio optimization, factor models, and MCMC risk estimation with the NUTS sampler.
 
 ## Installation
 
@@ -18,11 +18,19 @@ uv pip install pymc arviz
 ```python
 import pymc as pm
 import numpy as np
+import arviz as az
 
-returns = np.random.normal(0, 0.02, 500)
+returns = np.random.randn(500) * 0.02
 
-with pm.Model() as sv_model:
+with pm.Model() as sv:
     sigma = pm.InverseGamma("sigma", alpha=2, beta=1)
-    h = pm.GaussianRandomWalk("h", sigma=sigma, shape=len(returns))
-    obs = pm.Normal("obs", mu=0, sigma=pm.math.exp(h / 2), observed=returns)
+    log_vol = pm.GaussianRandomWalk("log_vol", sigma=sigma, shape=len(returns))
+    obs = pm.Normal("obs", mu=0, sigma=pm.math.exp(log_vol / 2), observed=returns)
     trace = pm.sample(1000, tune=1000)
+
+az.plot_trace(trace)
+```
+
+## References
+- [PyMC docs](https://www.pymc.io/)
+- [Bayesian Methods for Hackers](https://github.com/CamDavidsonPilon/Probabilistic-Programming-and-Bayesian-Methods-for-Hackers)

@@ -368,7 +368,7 @@ fn render_compact(
         let is_expanded = expanded.contains(&msg_index);
         lines.push(Line::from(vec![Span::styled(
             format!("{} {label}", toggle_glyph(is_expanded)),
-            theme.fg_dim,
+            theme.meta_cognitive,
         )]));
 
         if is_expanded {

@@ -5,7 +5,7 @@ tags: [plaid, banking, financial-data, open-banking, fintech, ach, zorai]
 ---
 ## Overview
 
-Plaid connects to 12,000+ financial institutions for bank accounts, transactions, balances, income, and identity verification.
+Plaid connects applications to 12,000+ financial institutions for bank accounts, transactions, balances, income, identity verification, and ACH payments. Standard for fintech apps needing secure financial data access.
 
 ## Installation
 
@@ -19,18 +19,30 @@ uv pip install plaid-python
 import plaid
 from plaid.api import plaid_api
 
-configuration = plaid.Configuration(
+config = plaid.Configuration(
     host=plaid.Environment.Sandbox,
-    api_key={"clientId": "YOUR_ID", "secret": "YOUR_SECRET"},
+    api_key={"clientId": "YOUR_CLIENT_ID", "secret": "YOUR_SECRET"},
 )
-client = plaid_api.PlaidApi(plaid.ApiClient(configuration))
+client = plaid_api.PlaidApi(plaid.ApiClient(config))
 
-response = client.link_token_create(
-    plaid.LinkTokenCreateRequest(
-        user={"client_user_id": "user-123"},
-        client_name="My App",
-        products=["transactions"],
-        country_codes=["US"],
-        language="en",
-    )
-)
+resp = client.link_token_create(plaid.LinkTokenCreateRequest(
+    user={"client_user_id": "user-123"},
+    client_name="My App",
+    products=["transactions", "auth"],
+    country_codes=["US"],
+    language="en",
+))
+print(resp.link_token)
+```
+
+## Get Transactions
+
+```python
+resp = client.transactions_sync(plaid.TransactionsSyncRequest(access_token=access_token))
+for tx in resp.added:
+    print(f"{tx.date}: {tx.name} — ${tx.amount:.2f}")
+```
+
+## References
+- [Plaid API docs](https://plaid.com/docs/api/)
+- [Plaid Quickstart](https://plaid.com/docs/quickstart/)

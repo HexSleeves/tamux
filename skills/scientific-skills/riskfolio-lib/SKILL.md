@@ -5,7 +5,7 @@ tags: [portfolio-optimization, risk-parity, cvar, factor-models, risk-management
 ---
 ## Overview
 
-Riskfolio-Lib provides portfolio optimization with mean-variance, risk parity, CVaR, CDaR, worst-case, and robust methods. Factor models, Black-Litterman, NCO, and built-in visualization.
+Riskfolio-Lib provides portfolio optimization beyond mean-variance: risk parity, CVaR, CDaR, worst-case, robust optimization, NCO (Network Clustering), and hierarchical methods. Includes factor models, Black-Litterman, and built-in plotting for efficient frontiers.
 
 ## Installation
 
@@ -13,7 +13,7 @@ Riskfolio-Lib provides portfolio optimization with mean-variance, risk parity, C
 uv pip install riskfolio-lib
 ```
 
-## Portfolio Optimization
+## Mean-Variance Optimization
 
 ```python
 import riskfolio as rp
@@ -25,5 +25,14 @@ returns = prices.pct_change().dropna()
 port = rp.Portfolio(returns=returns)
 port.assets_stats(method_mu="hist", method_cov="hist")
 
-# Mean-variance optimization
+# Max Sharpe
 w = port.optimization(model="Classic", rm="MV", obj="Sharpe", hist=True)
+print("Optimal weights:", w.to_dict())
+
+# Risk parity
+w_rp = port.optimization(model="Classic", rm="MV", obj="MinRisk", hist=True)
+```
+
+## References
+- [Riskfolio-Lib docs](https://riskfolio-lib.readthedocs.io/)
+- [Riskfolio-Lib GitHub](https://github.com/dcajasn/Riskfolio-Lib)

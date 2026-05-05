@@ -5,12 +5,12 @@ tags: [milvus, vector-database, similarity-search, scale, embeddings, infrastruc
 ---
 ## Overview
 
-Milvus is a cloud-native vector database for billion-scale similarity search with GPU-accelerated indexing.
+Milvus is a cloud-native vector database for billion-scale similarity search. Supports GPU-accelerated indexing (IVF, HNSW, DiskANN), hybrid search (dense + sparse), multi-vector, streaming ingestion, time travel, and distributed deployment with Kubernetes.
 
-## Quick Start
+## Installation
 
 ```bash
-docker compose -f milvus-standalone-docker-compose.yml up -d
+docker compose -f https://github.com/milvus-io/milvus/releases/latest/download/milvus-standalone-docker-compose.yml up -d
 ```
 
 ## Python Client
@@ -22,7 +22,13 @@ connections.connect(host="localhost", port=19530)
 schema = CollectionSchema([
     FieldSchema("id", DataType.INT64, is_primary=True),
     FieldSchema("embedding", DataType.FLOAT_VECTOR, dim=384),
+    FieldSchema("text", DataType.VARCHAR, max_length=1000),
 ])
-collection = Collection("docs", schema)
-collection.create_index("embedding", {"index_type": "IVF_FLAT", "metric_type": "L2"})
+collection = Collection("documents", schema)
+collection.create_index("embedding", {"index_type": "IVF_FLAT", "metric_type": "L2", "params": {"nlist": 128}})
+collection.load()
 ```
+
+## References
+- [Milvus docs](https://milvus.io/docs)
+- [Milvus GitHub](https://github.com/milvus-io/milvus)

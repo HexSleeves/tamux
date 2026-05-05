@@ -143,6 +143,50 @@ fn sticky_thread_activity_uses_generic_phase_labels_with_top_padding() {
 }
 
 #[test]
+fn sticky_thread_actions_include_current_thread_owner_label() {
+    let mut model = build_model();
+    model.connected = true;
+    model.agent_config_loaded = true;
+    model
+        .chat
+        .reduce(chat::ChatAction::ThreadDetailReceived(chat::AgentThread {
+            id: "thread-user".to_string(),
+            agent_name: Some("Weles".to_string()),
+            title: "User Thread".to_string(),
+            messages: vec![chat::AgentMessage {
+                role: chat::MessageRole::Assistant,
+                content: "Approve?".to_string(),
+                actions: vec![chat::MessageAction {
+                    label: "Approve".to_string(),
+                    action_type: "approve".to_string(),
+                    thread_id: Some("thread-user".to_string()),
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-user".to_string()));
+
+    assert!(
+        model.actions_bar_visible(),
+        "thread actions should reserve the sticky row above the composer"
+    );
+
+    let input_start_row = model.height.saturating_sub(model.input_height() + 1);
+    let activity_row = input_start_row.saturating_sub(1) as usize;
+    let rows = render_plain_rows(&mut model);
+
+    assert!(
+        rows.get(activity_row)
+            .is_some_and(|row| row.contains("Weles [Approve]")),
+        "sticky actions should include the current thread owner before buttons: {}",
+        rows.join("\n")
+    );
+}
+
+#[test]
 fn sticky_thread_activity_phase_labels_rotate_during_same_event() {
     let mut model = build_model();
     model.connected = true;
@@ -530,6 +574,251 @@ fn background_workflow_notice_isolated_to_origin_thread_until_switch() {
         .reduce(chat::ChatAction::SelectThread("thread-other".to_string()));
 
     assert_eq!(model.footer_activity_text().as_deref(), Some("skill gate"));
+}
+
+#[test]
+fn background_thread_created_does_not_copy_or_select_active_transcript() {
+    let mut model = build_model();
+    seed_two_visible_threads(&mut model);
+    model.chat.reduce(chat::ChatAction::AppendMessage {
+        thread_id: "thread-user".to_string(),
+        message: chat::AgentMessage {
+            role: chat::MessageRole::Assistant,
+            content: "current thread answer".to_string(),
+            ..Default::default()
+        },
+    });
+
+    model.handle_client_event(ClientEvent::ThreadCreated {
+        thread_id: "thread-background".to_string(),
+        title: "Background Thread".to_string(),
+        agent_name: Some("DeepSeekorrr".to_string()),
+    });
+
+    assert_eq!(
+        model.chat.active_thread_id(),
+        Some("thread-user"),
+        "background thread creation must not steal the visible conversation"
+    );
+
+    let background = model
+        .chat
+        .threads()
+        .iter()
+        .find(|thread| thread.id == "thread-background")
+        .expect("background thread should be tracked");
+    assert!(
+        background.messages.is_empty(),
+        "background thread must not inherit messages from the active transcript"
+    );
+}
+
+#[test]
+fn cached_chat_render_does_not_reuse_previous_thread_after_spawned_navigation() {
+    let mut model = build_model();
+    model.connected = true;
+    model.agent_config_loaded = true;
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-root".to_string(),
+        title: "Root Thread".to_string(),
+    });
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-child".to_string(),
+        title: "Child Thread".to_string(),
+    });
+    model.chat.reduce(chat::ChatAction::AppendMessage {
+        thread_id: "thread-root".to_string(),
+        message: chat::AgentMessage {
+            role: chat::MessageRole::Assistant,
+            content: "root-only transcript".to_string(),
+            ..Default::default()
+        },
+    });
+    model.chat.reduce(chat::ChatAction::AppendMessage {
+        thread_id: "thread-child".to_string(),
+        message: chat::AgentMessage {
+            role: chat::MessageRole::Assistant,
+            content: "child-only transcript".to_string(),
+            ..Default::default()
+        },
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-root".to_string()));
+
+    let root_rows = render_plain_rows(&mut model).join("\n");
+    assert!(root_rows.contains("root-only transcript"));
+
+    assert!(model.chat.open_spawned_thread("thread-root", "thread-child"));
+
+    let child_rows = render_plain_rows(&mut model).join("\n");
+    assert!(
+        child_rows.contains("child-only transcript"),
+        "chat render cache must rebuild after active thread changes"
+    );
+    assert!(
+        !child_rows.contains("root-only transcript"),
+        "chat render cache must not reuse rows from the previous active thread"
+    );
+}
+
+#[test]
+fn paginated_thread_list_refresh_preserves_selected_thread_missing_from_page() {
+    let mut model = build_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-running".to_string(),
+        title: "Running Thread".to_string(),
+    });
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-selected".to_string(),
+        title: "Selected Thread".to_string(),
+    });
+    model.chat.reduce(chat::ChatAction::AppendMessage {
+        thread_id: "thread-selected".to_string(),
+        message: chat::AgentMessage {
+            role: chat::MessageRole::Assistant,
+            content: "selected-only transcript".to_string(),
+            ..Default::default()
+        },
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-selected".to_string()));
+
+    model.handle_client_event(ClientEvent::ThreadList(vec![crate::wire::AgentThread {
+        id: "thread-running".to_string(),
+        title: "Running Thread".to_string(),
+        updated_at: 200,
+        ..Default::default()
+    }]));
+
+    assert_eq!(
+        model.chat.active_thread_id(),
+        Some("thread-selected"),
+        "a paginated list page must not clear the selected thread just because it is not present"
+    );
+
+    model.handle_thread_detail_event(crate::wire::AgentThread {
+        id: "thread-running".to_string(),
+        title: "Running Thread".to_string(),
+        messages: vec![crate::wire::AgentMessage {
+            role: crate::wire::MessageRole::Assistant,
+            content: "running-only transcript".to_string(),
+            timestamp: 1,
+            message_kind: "normal".to_string(),
+            ..Default::default()
+        }],
+        total_message_count: 1,
+        loaded_message_start: 0,
+        loaded_message_end: 1,
+        ..Default::default()
+    });
+
+    assert_eq!(
+        model.chat.active_thread_id(),
+        Some("thread-selected"),
+        "a later detail response for another thread must not take over the selected thread"
+    );
+    let selected = model
+        .chat
+        .active_thread()
+        .expect("selected thread should still be active");
+    assert!(
+        selected
+            .messages
+            .iter()
+            .any(|message| message.content == "selected-only transcript"),
+        "selected thread content should remain attached to the selected thread"
+    );
+}
+
+#[test]
+fn paginated_thread_list_refresh_preserves_other_loaded_threads() {
+    let mut model = build_model();
+    for thread_id in ["thread-running", "thread-selected", "thread-other"] {
+        model.chat.reduce(chat::ChatAction::ThreadCreated {
+            thread_id: thread_id.to_string(),
+            title: thread_id.to_string(),
+        });
+    }
+    model.chat.reduce(chat::ChatAction::AppendMessage {
+        thread_id: "thread-other".to_string(),
+        message: chat::AgentMessage {
+            role: chat::MessageRole::Assistant,
+            content: "other-only transcript".to_string(),
+            ..Default::default()
+        },
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-selected".to_string()));
+
+    model.handle_client_event(ClientEvent::ThreadList(vec![crate::wire::AgentThread {
+        id: "thread-running".to_string(),
+        title: "Running Thread".to_string(),
+        updated_at: 200,
+        ..Default::default()
+    }]));
+
+    let other = model
+        .chat
+        .threads()
+        .iter()
+        .find(|thread| thread.id == "thread-other")
+        .expect("loaded threads missing from a paginated refresh page should remain cached");
+    assert!(
+        other
+            .messages
+            .iter()
+            .any(|message| message.content == "other-only transcript"),
+        "non-active cached thread content should not vanish on a partial list refresh"
+    );
+}
+
+#[test]
+fn late_skill_scout_notice_after_done_does_not_restore_footer_activity() {
+    let mut model = build_model();
+    model.chat.reduce(chat::ChatAction::ThreadCreated {
+        thread_id: "thread-user".to_string(),
+        title: "User Thread".to_string(),
+    });
+    model
+        .chat
+        .reduce(chat::ChatAction::SelectThread("thread-user".to_string()));
+
+    model.handle_client_event(ClientEvent::Delta {
+        thread_id: "thread-user".to_string(),
+        content: "finished answer".to_string(),
+    });
+    model.handle_client_event(ClientEvent::Done {
+        thread_id: "thread-user".to_string(),
+        input_tokens: 1,
+        output_tokens: 2,
+        cost: None,
+        provider: None,
+        model: None,
+        tps: None,
+        generation_ms: None,
+        reasoning: None,
+        provider_final_result_json: None,
+    });
+
+    assert!(
+        model.footer_activity_text().is_none(),
+        "done should leave the active thread idle"
+    );
+
+    model.handle_client_event(ClientEvent::WorkflowNotice {
+        thread_id: Some("thread-user".to_string()),
+        kind: "skill-community-scout".to_string(),
+        message: "Community scout update".to_string(),
+        details: Some(r#"{"candidates":["skill-a"]}"#.to_string()),
+    });
+
+    assert!(
+        model.footer_activity_text().is_none(),
+        "late skill scout notices for completed turns must not wake the footer"
+    );
 }
 
 #[test]

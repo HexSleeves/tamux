@@ -168,6 +168,8 @@ pub struct TuiModel {
 
     // Ignore a stale concierge welcome that arrives after the user navigated away.
     ignore_pending_concierge_welcome: bool,
+    operator_profile_auto_start_requested: bool,
+    operator_profile_auto_start_pending_summary: bool,
 
     // Gateway connection statuses received from daemon
     pub gateway_statuses: Vec<chat::GatewayStatusVm>,

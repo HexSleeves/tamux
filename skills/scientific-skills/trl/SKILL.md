@@ -5,7 +5,7 @@ tags: [rlhf-post-training, dpo-training, ppo-alignment, supervised-finetuning, t
 ---
 ## Overview
 
-TRL provides Supervised Fine-Tuning (SFT), reward modeling, PPO, DPO, KTO, and GRPO for LLM alignment. Standard library from Hugging Face for RLHF pipelines.
+TRL (Transformer Reinforcement Learning) is Hugging Face's library for RLHF — SFT, reward modeling, PPO, DPO, KTO, and GRPO. It's the standard post-training toolkit for aligning language models with human preferences.
 
 ## Installation
 
@@ -35,10 +35,14 @@ trainer.train()
 ```python
 from trl import DPOTrainer
 
-dpo_trainer = DPOTrainer(
+dpo = DPOTrainer(
     model=model, ref_model=ref_model, tokenizer=tokenizer,
     train_dataset=preference_dataset,
     args=dict(per_device_train_batch_size=4, max_length=2048),
 )
-dpo_trainer.train()
+dpo.train()
 ```
+
+## References
+- [TRL docs](https://huggingface.co/docs/trl)
+- [TRL GitHub](https://github.com/huggingface/trl)

@@ -5,7 +5,7 @@ tags: [google-adk, agent-framework, multi-agent, vertex-ai, google, python, zora
 ---
 ## Overview
 
-Google Agent Development Kit (ADK) is a code-first Python toolkit for building, evaluating, and deploying AI agents with Vertex AI integration.
+Google Agent Development Kit (ADK) is a code-first Python framework for building AI agents powered by Gemini. Supports tool integration, handoffs between agents, guardrails, multi-agent graphs, and deployment to Vertex AI Agent Builder for production serving.
 
 ## Installation
 
@@ -13,14 +13,14 @@ Google Agent Development Kit (ADK) is a code-first Python toolkit for building, 
 uv pip install google-adk
 ```
 
-## Simple Agent
+## Basic Agent
 
 ```python
 from google.adk.agents import Agent
 from google.adk.tools import FunctionTool
 
-def get_weather(location):
-    return f"Weather in {location} is sunny."
+def get_weather(location: str) -> str:
+    return f"The weather in {location} is 22C and sunny."
 
 agent = Agent(
     name="weather_agent",
@@ -29,6 +29,22 @@ agent = Agent(
     tools=[FunctionTool(get_weather)],
 )
 
-response = agent.run("What is the weather in Paris?")
+response = agent.run("What's the weather in Paris?")
 print(response.content)
 ```
+
+## Multi-Agent Handoff
+
+```python
+research = Agent(name="researcher", model="gemini-2.0-flash", ...)
+writer = Agent(name="writer", model="gemini-2.0-flash", ...)
+reviewer = Agent(name="reviewer", model="gemini-2.0-flash", ...)
+
+from google.adk.runners import Runner
+runner = Runner(agents=[research, writer, reviewer])
+result = runner.run("Research and write about quantum computing.")
+```
+
+## References
+- [Google ADK docs](https://cloud.google.com/agent-development-kit/docs)
+- [ADK GitHub](https://github.com/google/adk-python)

@@ -474,6 +474,8 @@ struct OperatorProfileOnboardingState {
     progress: Option<OperatorProfileProgressVm>,
     summary_json: Option<String>,
     warning: Option<String>,
+    bool_answer: Option<bool>,
+    deferred_session_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

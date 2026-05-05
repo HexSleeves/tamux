@@ -102,6 +102,8 @@ impl TuiModel {
             pending_reconnect_restore: None,
             pending_goal_hydration_refreshes: std::collections::HashSet::new(),
             ignore_pending_concierge_welcome: false,
+            operator_profile_auto_start_requested: false,
+            operator_profile_auto_start_pending_summary: false,
             gateway_statuses: Vec::new(),
             weles_health: None,
             recent_actions: Vec::new(),
@@ -468,5 +470,4 @@ impl TuiModel {
             .as_deref()
             .unwrap_or("PROMPT")
     }
-
 }

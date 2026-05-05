@@ -5,7 +5,7 @@ tags: [financial-data, economic-data, fred, world-bank, time-series, python, zor
 ---
 ## Overview
 
-Multi-source economic and financial data reader: FRED, World Bank, OECD, Eurostat, St. Louis Fed, Yahoo, and more. Standard interface for time series data ingestion across 200+ countries.
+pandas-datareader provides a unified interface for reading economic and financial time series from multiple sources: FRED (Federal Reserve), World Bank, OECD, Eurostat, Yahoo Finance, and St. Louis Fed. Standard data ingestion for macroeconomic research and quantitative analysis.
 
 ## Installation
 
@@ -13,16 +13,25 @@ Multi-source economic and financial data reader: FRED, World Bank, OECD, Eurosta
 uv pip install pandas-datareader
 ```
 
-## FRED Data (Federal Reserve)
+## FRED (Federal Reserve Economic Data)
 
 ```python
 import pandas_datareader.data as web
 import datetime
 
 start = datetime.datetime(2020, 1, 1)
-end = datetime.datetime(2024, 12, 31)
+gdp = web.DataReader("GDP", "fred", start)
+cpi = web.DataReader("CPIAUCSL", "fred", start)
+fedfunds = web.DataReader("FEDFUNDS", "fred", start)
+unemp = web.DataReader("UNRATE", "fred", start)
+```
 
-gdp = web.DataReader("GDP", "fred", start, end)
-unrate = web.DataReader("UNRATE", "fred", start, end)
-cpi = web.DataReader("CPIAUCSL", "fred", start, end)
-fedfunds = web.DataReader("FEDFUNDS", "fred", start, end)
+## World Bank
+
+```python
+gdp_pc = web.DataReader("NY.GDP.PCAP.CD", "worldbank", start=2015)
+```
+
+## References
+- [pandas-datareader docs](https://pandas-datareader.readthedocs.io/)
+- [FRED API](https://fred.stlouisfed.org/docs/api/fred/)

@@ -5,30 +5,41 @@ tags: [icd10, cpt, snomed, loinc, medical-coding, hcc, reimbursement, zorai]
 ---
 ## Overview
 
-Medical code mapping and classification: ICD-10-CM/PCS, CPT, SNOMED CT, HCPCS, LOINC, RxNorm. Code validation, cross-terminology mapping, HCC risk adjustment, and reimbursement modeling.
+Medical code mapping and classification: ICD-10-CM/PCS, CPT, SNOMED CT, HCPCS, LOINC, RxNorm. Covers code validation, cross-terminology mapping, HCC risk adjustment, and reimbursement modeling used in healthcare billing and clinical research.
 
-## HCC Risk Adjustment
+## ICD-10 to HCC Mapping
 
 ```python
-# HCC mapping (simplified)
 hcc_map = {
-    "E11.9": "HCC 19",    # Diabetes without complications
-    "I10": "HCC 134",     # Essential hypertension
-    "N18.3": "HCC 138",   # CKD stage 3
+    "E11.9": "HCC 19",   # Diabetes without complications
+    "I10": "HCC 134",    # Essential hypertension
+    "N18.3": "HCC 138",  # CKD stage 3
 }
 
-def get_hcc_codes(dx_codes):
-    codes = set()
-    for code in dx_codes:
-        if code in hcc_map:
-            codes.add(hcc_map[code])
-    return list(codes)
+def calc_hcc(codes):
+    hccs = set()
+    for c in codes:
+        if c in hcc_map:
+            hccs.add(hcc_map[c])
+    return list(hccs)
+
+print(calc_hcc(["E11.9", "I10"]))
 ```
 
-## Workflow
+## Code Validation
 
-1. Map source codes to standard terminologies (ICD-10, SNOMED, LOINC)
-2. Validate codes against official code sets
-3. Cross-map between terminologies for interoperability
-4. Calculate HCC risk scores for reimbursement modeling
-5. Generate compliance-ready code lists for submissions
+```python
+valid_icd10 = set()  # from official CMS file or lookup
+
+def validate_code(code):
+    if code in valid_icd10:
+        return True, "Valid"
+    if code[:3] in valid_icd10:
+        return True, "Valid (category)"
+    return False, "Unknown code"
+```
+
+## References
+- [CMS ICD-10](https://www.cms.gov/medicare/coding/icd10)
+- [SNOMED CT](https://www.snomed.org/)
+- [HCC coding](https://www.cms.gov/medicare/health-plans/medicareadvtgspecratestats/risk-adjustors)

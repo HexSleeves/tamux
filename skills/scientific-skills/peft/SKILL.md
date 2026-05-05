@@ -5,7 +5,7 @@ tags: [peft, lora, qlora, fine-tuning, llm, huggingface, parameter-efficient, zo
 ---
 ## Overview
 
-PEFT enables efficient adaptation of large pretrained models by fine-tuning only a small number of extra parameters. LoRA, QLoRA, AdaLoRA, IA3, Prefix Tuning, and Prompt Tuning. Reduces GPU memory by 4-16x vs full fine-tuning.
+PEFT (Parameter-Efficient Fine-Tuning) adapts large pretrained models by training only a small subset of parameters. Supports LoRA, QLoRA, AdaLoRA, IA3, Prefix Tuning, P-Tuning, and Prompt Tuning. Reduces GPU memory by 4-16x compared to full fine-tuning.
 
 ## Installation
 
@@ -13,50 +13,40 @@ PEFT enables efficient adaptation of large pretrained models by fine-tuning only
 uv pip install peft
 ```
 
-## LoRA Fine-Tuning
+## LoRA
 
 ```python
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM
 from peft import LoraConfig, get_peft_model, TaskType
 
-model_id = "Qwen/Qwen2.5-3B-Instruct"
-model = AutoModelForCausalLM.from_pretrained(model_id)
-tokenizer = AutoTokenizer.from_pretrained(model_id)
-
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct")
 peft_config = LoraConfig(
     r=16, lora_alpha=32,
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-    lora_dropout=0.05, bias="none",
     task_type=TaskType.CAUSAL_LM,
 )
 model = get_peft_model(model, peft_config)
 model.print_trainable_parameters()
-
-# Train with standard HF Trainer
 ```
 
-## QLoRA (Quantized)
+## Save & Merge
+
+```python
+model.save_pretrained("adapter")
+from peft import PeftModel
+base = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct")
+merged = PeftModel.from_pretrained(base, "adapter").merge_and_unload()
+```
+
+## QLoRA
 
 ```python
 from transformers import BitsAndBytesConfig
-import torch
-
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16,
-)
-model = AutoModelForCausalLM.from_pretrained(
-    model_id, quantization_config=bnb_config, device_map="auto"
-)
+model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen2.5-1.5B-Instruct",
+    quantization_config=BitsAndBytesConfig(load_in_4bit=True), device_map="auto")
 model = get_peft_model(model, peft_config)
 ```
 
-## Saving/Merging
-
-```python
-model.save_pretrained("my-lora-adapter")
-from peft import PeftModel
-base = AutoModelForCausalLM.from_pretrained(model_id)
-merged = PeftModel.from_pretrained(base, "my-lora-adapter").merge_and_unload()
-```
+## References
+- [PEFT docs](https://huggingface.co/docs/peft)
+- [PEFT GitHub](https://github.com/huggingface/peft)

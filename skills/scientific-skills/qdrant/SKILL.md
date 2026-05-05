@@ -5,9 +5,9 @@ tags: [qdrant, vector-database, similarity-search, embeddings, rag, infrastructu
 ---
 ## Overview
 
-Qdrant is a vector similarity search engine with payload filtering, quantized indexing, and horizontal scaling. REST and gRPC API.
+Qdrant is a high-performance vector similarity search engine supporting dense and sparse vectors, payload indexing and filtering, scalar/PQ quantization, multi-tenancy, and horizontal scaling via clustering. REST and gRPC APIs with async support.
 
-## Quick Start
+## Installation
 
 ```bash
 docker run -p 6333:6333 qdrant/qdrant
@@ -17,9 +17,22 @@ docker run -p 6333:6333 qdrant/qdrant
 
 ```python
 from qdrant_client import QdrantClient, models
+import numpy as np
 
 client = QdrantClient("localhost", port=6333)
-client.create_collection("docs", vectors_config=models.VectorParams(size=384, distance=models.Distance.COSINE))
-client.upsert("docs", points=[models.PointStruct(id=1, vector=[0.1]*384, payload={"text": "Paris is capital"})])
-results = client.search("docs", query_vector=[0.1]*384, limit=5)
+client.create_collection("documents", vectors_config=models.VectorParams(
+    size=384, distance=models.Distance.COSINE))
+
+client.upsert("documents", points=[
+    models.PointStruct(id=1, vector=np.random.rand(384).tolist(), payload={"text": "Paris is capital of France"}),
+    models.PointStruct(id=2, vector=np.random.rand(384).tolist(), payload={"text": "Berlin is capital of Germany"}),
+])
+
+results = client.search("documents", query_vector=np.random.rand(384).tolist(), limit=5)
+for hit in results:
+    print(hit.payload["text"], hit.score)
 ```
+
+## References
+- [Qdrant docs](https://qdrant.tech/documentation/)
+- [Qdrant GitHub](https://github.com/qdrant/qdrant)

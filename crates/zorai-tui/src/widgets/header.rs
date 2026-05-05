@@ -235,6 +235,16 @@ fn build_system_monitor_label(system_monitor: &SystemMonitorDisplay) -> String {
     );
     if let Some(gpu_percent) = system_monitor.gpu_percent {
         label.push_str(&format!("  GPU {:.0}%", gpu_percent));
+        if let (Some(gpu_used_bytes), Some(gpu_total_bytes)) = (
+            system_monitor.gpu_memory_used_bytes,
+            system_monitor.gpu_memory_total_bytes,
+        ) {
+            label.push_str(&format!(
+                " {:.1}/{:.0}G",
+                bytes_to_gib(gpu_used_bytes),
+                bytes_to_gib(gpu_total_bytes)
+            ));
+        }
     }
     label
 }
@@ -559,9 +569,11 @@ mod tests {
             memory_used_bytes: 8 * 1024 * 1024 * 1024,
             memory_total_bytes: 32 * 1024 * 1024 * 1024,
             gpu_percent: Some(47.6),
+            gpu_memory_used_bytes: Some(3277 * 1024 * 1024),
+            gpu_memory_total_bytes: Some(24 * 1024 * 1024 * 1024),
         });
 
-        assert_eq!(label, "CPU 12%  MEM 8.0/32G  GPU 48%");
+        assert_eq!(label, "CPU 12%  MEM 8.0/32G  GPU 48% 3.2/24G");
     }
 
     #[test]
@@ -571,6 +583,8 @@ mod tests {
             memory_used_bytes: 512 * 1024 * 1024,
             memory_total_bytes: 2 * 1024 * 1024 * 1024,
             gpu_percent: None,
+            gpu_memory_used_bytes: None,
+            gpu_memory_total_bytes: None,
         });
 
         assert_eq!(label, "CPU 4%  MEM 0.5/2G");

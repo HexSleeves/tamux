@@ -1073,35 +1073,6 @@ impl TuiModel {
     }
 
     fn render_conversation_panel(&mut self, frame: &mut Frame, area: Rect) {
-        if self.should_show_operator_profile_onboarding() {
-            let question = self.operator_profile.question.as_ref().map(|question| {
-                widgets::operator_profile_onboarding::OperatorProfileQuestionView {
-                    field_key: question.field_key.as_str(),
-                    prompt: question.prompt.as_str(),
-                    input_kind: question.input_kind.as_str(),
-                    optional: question.optional,
-                }
-            });
-            let progress = self.operator_profile.progress.as_ref().map(|progress| {
-                widgets::operator_profile_onboarding::OperatorProfileProgressView {
-                    answered: progress.answered,
-                    remaining: progress.remaining,
-                    completion_ratio: progress.completion_ratio,
-                }
-            });
-            let view = widgets::operator_profile_onboarding::OperatorProfileOnboardingView {
-                session_kind: self.operator_profile.session_kind.as_deref(),
-                question,
-                progress,
-                loading: self.operator_profile.loading,
-                warning: self.operator_profile.warning.as_deref(),
-                input_value: self.input.buffer(),
-                select_options: self.current_operator_profile_select_options(),
-            };
-            widgets::operator_profile_onboarding::render(frame, area, &view, &self.theme);
-            return;
-        }
-
         if self.should_show_provider_onboarding() {
             widgets::onboarding::render(frame, area, &self.config, &self.theme);
             return;
@@ -1822,6 +1793,7 @@ impl TuiModel {
         let sticky_activity = footer_activity
             .as_deref()
             .map(|activity| self.sticky_thread_activity_text(activity));
+        let sticky_owner_label = self.current_conversation_agent_profile().agent_label;
 
         if concierge_height > 0 {
             widgets::concierge::render(
@@ -1832,6 +1804,7 @@ impl TuiModel {
                 &self.theme,
                 self.focus == FocusArea::Chat,
                 sticky_activity.as_deref(),
+                &sticky_owner_label,
             );
         }
 
@@ -1876,6 +1849,9 @@ impl TuiModel {
                 }
                 modal::ModalKind::OperatorQuestionOverlay => {
                     render_helpers::centered_rect(68, 34, area)
+                }
+                modal::ModalKind::OperatorProfileOnboarding => {
+                    render_helpers::centered_fixed_rect(92, 21, area)
                 }
                 modal::ModalKind::ApprovalCenter => render_helpers::centered_rect(86, 82, area),
                 modal::ModalKind::ChatActionConfirm => render_helpers::centered_rect(48, 28, area),
@@ -2119,6 +2095,16 @@ impl TuiModel {
                     );
                 }
                 modal::ModalKind::OperatorQuestionOverlay => {}
+                modal::ModalKind::OperatorProfileOnboarding => {
+                    let view = self.operator_profile_onboarding_view();
+                    widgets::operator_profile_onboarding::render(
+                        frame,
+                        overlay_area,
+                        &view,
+                        self.modal.picker_cursor(),
+                        &self.theme,
+                    );
+                }
                 modal::ModalKind::ApprovalCenter => {
                     widgets::approval_center::render(
                         frame,
@@ -2357,6 +2343,9 @@ impl TuiModel {
             }
             modal::ModalKind::OperatorQuestionOverlay => {
                 render_helpers::centered_rect(68, 34, area)
+            }
+            modal::ModalKind::OperatorProfileOnboarding => {
+                render_helpers::centered_fixed_rect(92, 21, area)
             }
             modal::ModalKind::ApprovalCenter => render_helpers::centered_rect(86, 82, area),
             modal::ModalKind::ChatActionConfirm => render_helpers::centered_rect(48, 28, area),

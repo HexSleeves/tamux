@@ -5,7 +5,7 @@ tags: [chromadb, vector-database, embeddings, rag, semantic-search, python, zora
 ---
 ## Overview
 
-Chroma is an AI-native embedding database. Lightweight, in-process, with automatic embedding, metadata filtering, and semantic search.
+Chroma is an AI-native embedding database optimized for RAG workflows. In-process, lightweight, with automatic embedding via sentence-transformers, metadata filtering, semantic search, and no separate server required. Simplest path from prototype to production.
 
 ## Installation
 
@@ -13,13 +13,13 @@ Chroma is an AI-native embedding database. Lightweight, in-process, with automat
 uv pip install chromadb
 ```
 
-## Basic Usage
+## Persistent Usage
 
 ```python
 import chromadb
 
 client = chromadb.PersistentClient(path="./chroma_db")
-collection = client.create_collection(name="docs")
+collection = client.create_collection(name="documents")
 
 collection.add(
     documents=["Paris is the capital of France.", "Berlin is the capital of Germany."],
@@ -27,6 +27,14 @@ collection.add(
     ids=["doc1", "doc2"],
 )
 
-results = collection.query(query_texts=["French capital"], n_results=1)
+results = collection.query(
+    query_texts=["What is the capital of France?"],
+    n_results=3,
+    where={"country": "France"},
+)
 print(results["documents"])
 ```
+
+## References
+- [Chroma docs](https://docs.trychroma.com/)
+- [Chroma GitHub](https://github.com/chroma-core/chroma)

@@ -5,12 +5,12 @@ tags: [clip, multimodal, image-text, zero-shot, embeddings, openai, zorai]
 ---
 ## Overview
 
-OpenAI CLIP provides zero-shot image classification and image-text similarity by embedding images and text into a shared space.
+OpenAI CLIP (Contrastive Language-Image Pre-training) learns joint text-image representations. Enables zero-shot image classification, image-text similarity, cross-modal search, and image captioning without task-specific training.
 
 ## Installation
 
 ```bash
-uv pip install open-clip-torch
+uv pip install openai-clip
 ```
 
 ## Zero-Shot Classification
@@ -18,14 +18,28 @@ uv pip install open-clip-torch
 ```python
 import clip
 import torch
-from PIL import Image
 
 model, preprocess = clip.load("ViT-B/32")
-image = preprocess(Image.open("photo.jpg")).unsqueeze(0)
-text = clip.tokenize(["a dog", "a cat", "a car"])
+image = preprocess(load_image("photo.jpg")).unsqueeze(0)
+text = clip.tokenize(["a dog", "a cat", "a bird"])
 
 with torch.no_grad():
-    logits_per_image, _ = model(image, text)
-    probs = logits_per_image.softmax(dim=-1)
-print(probs)
+    logits, _ = model(image, text)
+    probs = logits.softmax(dim=-1)
+
+print(f"Predicted: class {probs.argmax().item()} with {probs.max():.2%} confidence")
 ```
+
+## Text-Image Similarity
+
+```python
+images = torch.stack([preprocess(img) for img in [load_image("a.jpg"), load_image("b.jpg")]])
+texts = clip.tokenize(["sunset", "ocean", "mountain"])
+
+with torch.no_grad():
+    similarity = model(images, texts)[0].softmax(dim=-1)
+```
+
+## References
+- [CLIP GitHub](https://github.com/openai/CLIP)
+- [CLIP paper](https://arxiv.org/abs/2103.00020)

@@ -5,7 +5,7 @@ tags: [qlora-finetuning, lora-finetuning, memory-efficient-tuning, quantized-llm
 ---
 ## Overview
 
-Unsloth provides 2x faster QLoRA training with 50% less memory. Supports Llama, Mistral, Gemma, Qwen, DeepSeek, Phi with Flash Attention and 4-bit quantization.
+Unsloth provides 2x faster QLoRA training with 50% less memory via optimized kernels. Supports Llama, Mistral, Gemma, Qwen 2.5, DeepSeek, Phi,  Yi, and Falcon with Flash Attention.
 
 ## Installation
 
@@ -25,16 +25,11 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     dtype=torch.bfloat16,
     load_in_4bit=True,
 )
-
 model = FastLanguageModel.get_peft_model(
-    model,
-    r=16,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
-    lora_alpha=16,
-    lora_dropout=0,
-    use_gradient_checkpointing="unsloth",
+    model, r=16, target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+    lora_alpha=16, use_gradient_checkpointing="unsloth",
 )
-print(f"Trainable: {model.print_trainable_parameters()}")
+print(model.print_trainable_parameters())
 ```
 
 ## Inference
@@ -42,6 +37,9 @@ print(f"Trainable: {model.print_trainable_parameters()}")
 ```python
 FastLanguageModel.for_inference(model)
 inputs = tokenizer(["Describe quantum computing."], return_tensors="pt").to("cuda")
-outputs = model.generate(**inputs, max_new_tokens=256)
-print(tokenizer.decode(outputs[0]))
+print(tokenizer.decode(model.generate(**inputs, max_new_tokens=256)[0]))
 ```
+
+## References
+- [Unsloth GitHub](https://github.com/unslothai/unsloth)
+- [Unsloth docs](https://docs.unsloth.ai/)

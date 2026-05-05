@@ -363,6 +363,14 @@ impl TuiModel {
             self.handle_sidebar_enter();
             return false;
         }
+        if self.should_show_operator_profile_onboarding()
+            && self.is_current_operator_profile_bool_question()
+            && !modifiers
+                .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL)
+        {
+            let _ = self.submit_operator_profile_answer();
+            return false;
+        }
         if self.focus != FocusArea::Input {
             self.focus = FocusArea::Input;
             self.input.set_mode(input::InputMode::Insert);

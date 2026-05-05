@@ -5,7 +5,7 @@ tags: [dowhy, causal-inference, causal-graph, identification, estimation, micros
 ---
 ## Overview
 
-DoWhy (Microsoft) provides causal inference with causal graph modeling, identification (back-door, front-door, IV), estimation, and refutation/robustness checks.
+DoWhy (Microsoft/py-why) provides end-to-end causal inference with causal graph modeling (DAG specification), identification (back-door, front-door, IV), estimation (linear regression, matching, IV, double-ML), and refutation (placebo, bootstrap, random common cause).
 
 ## Installation
 
@@ -13,20 +13,30 @@ DoWhy (Microsoft) provides causal inference with causal graph modeling, identifi
 uv pip install dowhy
 ```
 
-## Basic Usage
+## Example
 
 ```python
-import dowhy
 from dowhy import CausalModel
 
 model = CausalModel(
     data=df,
     treatment="treatment",
     outcome="outcome",
-    common_causes=["age", "gender"],
+    common_causes=["age", "gender", "income"],
 )
 
-identified = model.identify_effect()
+# Identify causal effect
+identified = model.identify_effect(proceed_when_unidentifiable=True)
+
+# Estimate
 estimate = model.estimate_effect(identified, method_name="backdoor.linear_regression")
+print(f"ATE: {estimate.value:.4f}")
+
+# Refute
 refute = model.refute_estimate(identified, estimate, method_name="placebo_treatment_refuter")
+print(refute)
 ```
+
+## References
+- [DoWhy docs](https://www.pywhy.org/dowhy/)
+- [DoWhy GitHub](https://github.com/py-why/dowhy)
